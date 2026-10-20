@@ -4,7 +4,7 @@ Gatherly AI is a responsive event-planning workspace for weddings, birthdays, co
 
 ## What works
 
-- A no-account sample workspace to explore the product without exposing private data.
+- A public welcome page with Google sign-in and a clearly labelled, opt-in sample workspace.
 - Google sign-in and a private Firestore workspace when Firebase is configured.
 - Event-specific vendor categories; optional Google Places search; users contact and confirm vendors themselves.
 - Gemini first-draft plans with budget, contingency, timeline tasks, and vendor categories. Figures are planning estimates, never quotes or confirmed availability.
@@ -27,10 +27,10 @@ Copy `.env.example` to `.env.local`. Firebase values are web-app configuration, 
 
 ### Google services
 
-1. **Firebase Authentication** — enable the Google provider; add the deployed domain to authorized domains.
+1. **Firebase Authentication** — enable the Google provider; add the deployed domain to authorized domains. Set the Google Auth Platform branding name to **Gatherly AI** so consent screens do not show the generated project name. Google currently requires an application home page, privacy-policy URL, and developer contact email before it will save branding. The Firebase auth handler normally uses the project's `firebaseapp.com` domain. To use `gatherlyai.web.app` as `authDomain`, set `VITE_FIREBASE_AUTH_DOMAIN=gatherlyai.web.app` and add `https://gatherlyai.web.app/__/auth/handler` to the OAuth web client's authorized redirect URIs; the Firebase Hosting reserved auth endpoints must remain available.
 2. **Cloud Firestore** — create a database and deploy the included owner-only rules (`firebase deploy --only firestore:rules`). Events are scoped to `users/{uid}/events/{eventId}`.
 3. **Firebase AI Logic** — enable Gemini Developer API in the Firebase console guided setup. Calls go directly from the browser through Firebase AI Logic; no Gemini key is shipped. Choose a Gemini model available in your Firebase project and set it in `src/lib/ai.ts` if required.
-4. **Optional Google Maps Platform** — enable **Maps JavaScript API** and **Places API (New)**, add a browser key as `VITE_GOOGLE_MAPS_API_KEY`, and restrict it to the deployed website referrers and those APIs. Places requires a billing-enabled Maps project and may incur charges; the app works without it. Location lookup uses the Maps JavaScript geocoder. Location permission is optional; city entry is supported.
+4. **Optional Google Maps Platform** — enable **Maps JavaScript API** and **Places API (New)**, create a browser key as `VITE_GOOGLE_MAPS_API_KEY` in `.env.local`, and restrict it to the deployed website referrers and those APIs. Enabling APIs alone is insufficient: Maps requests need a key, and Places requires billing to be enabled on the project and may incur charges. Until a key is configured, the app opens the same search in Google Maps instead of silently failing. Location lookup uses the Maps JavaScript geocoder. Location permission is optional; city entry is supported.
 5. **Firebase App Check** — register reCAPTCHA v3, set `VITE_RECAPTCHA_V3_SITE_KEY`, and enforce App Check for supported Firebase services after verifying tokens in production.
 
 No Calendar API or contact permissions are required. The guest flow opens the user's email client and requires their action. A phone call, shortlist, or “Confirmed” label is not a vendor booking transaction.

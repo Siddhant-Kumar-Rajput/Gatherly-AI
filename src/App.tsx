@@ -12,8 +12,10 @@ const newId = () => crypto.randomUUID();
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
-  const [events, setEvents] = useState<EventRecord[]>(demoMode ? DEMO_EVENTS : []);
-  const [activeId, setActiveId] = useState(demoMode ? DEMO_EVENTS[1].id : "");
+  const [authReady, setAuthReady] = useState(!firebaseConfigured);
+  const [demoPreview, setDemoPreview] = useState(false);
+  const [events, setEvents] = useState<EventRecord[]>([]);
+  const [activeId, setActiveId] = useState("");
   const [screen, setScreen] = useState<"overview" | "event">("overview");
   const [dialog, setDialog] = useState<"event" | "ai" | "guest" | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -28,22 +30,28 @@ export default function App() {
     let cancelled = false;
     let unsubscribe = () => {};
     void import("./lib/firebase").then(({ auth }) => {
-      if (cancelled || !auth) return;
+      if (cancelled) return;
+      if (!auth) { setAuthReady(true); return; }
       return import("firebase/auth").then(({ onAuthStateChanged }) => {
         if (cancelled) return;
       unsubscribe = onAuthStateChanged(auth, (signed) => {
         setUser(signed ? { uid: signed.uid, displayName: signed.displayName || "Gatherly member", email: signed.email || "", photoURL: signed.photoURL || undefined } : null);
-        setEvents(signed ? [] : DEMO_EVENTS);
-        setActiveId(signed ? "" : DEMO_EVENTS[1].id);
+        setAuthReady(true);
         if (signed) {
+          setDemoPreview(false);
+          setEvents([]);
           setActiveId("");
           setScreen("overview");
           setDialog(null);
           setMenuOpen(false);
+        } else {
+          setDemoPreview(false);
+          setEvents([]);
+          setActiveId("");
         }
       });
       });
-    }).catch(() => setNotice("Firebase could not initialize. Check your project configuration."));
+    }).catch(() => { setAuthReady(true); setNotice("Firebase could not initialize. Check your project configuration."); });
     return () => { cancelled = true; unsubscribe(); };
   }, []);
   useEffect(() => {
@@ -71,13 +79,16 @@ export default function App() {
   };
 
   const login = async () => {
+    if (!firebaseConfigured) { setNotice("Google sign-in is not configured yet. Explore the sample workspace while Firebase is set up."); return; }
     setBusy("login");
     try { const { signInWithGoogle } = await import("./lib/firebase"); const signed = await signInWithGoogle(); setUser({ uid: signed.uid, displayName: signed.displayName || "Gatherly member", email: signed.email || "", photoURL: signed.photoURL || undefined }); setNotice("Signed in with Google."); }
     catch (error) { setNotice(error instanceof Error ? error.message : "Google sign-in failed."); }
     finally { setBusy(""); }
   };
 
-  const logout = async () => { const { signOutUser } = await import("./lib/firebase"); await signOutUser(); setUser(null); setEvents(DEMO_EVENTS); setActiveId(DEMO_EVENTS[1].id); setScreen("overview"); setNotice("You are signed out. Sample events remain available."); };
+  const logout = async () => { const { signOutUser } = await import("./lib/firebase"); await signOutUser(); setUser(null); setDemoPreview(false); setEvents([]); setActiveId(""); setScreen("overview"); setNotice("You are signed out."); };
+
+  const exploreDemo = () => { setDemoPreview(true); setEvents(DEMO_EVENTS); setActiveId(DEMO_EVENTS[1].id); setScreen("overview"); };
 
   const createEvent = (form: FormData) => {
     const kind = form.get("kind") as EventKind;
@@ -117,7 +128,15 @@ export default function App() {
   };
 
   const addPlaces = async () => {
-    if (!cityDraft.trim()) return;
+    if (!cityDraft.trim()) { setNotice("Enter a city or neighbourhood to search for local vendors."); return; }
+    if (!import.meta.env.VITE_GOOGLE_MAPS_API_KEY) {
+      const mapsUrl = new URL("https://www.google.com/maps/search/");
+      mapsUrl.searchParams.set("api", "1");
+      mapsUrl.searchParams.set("query", `${query || active.vendorCategories[0] || "event vendors"} in ${cityDraft}`);
+      window.open(mapsUrl.toString(), "_blank", "noopener,noreferrer");
+      setNotice("Opened Google Maps for this search. To save Google Places results in Gatherly, add a restricted Maps browser key to .env.local.");
+      return;
+    }
     setBusy("places");
     try {
       const { searchLocalPlaces } = await import("./lib/maps");
@@ -143,9 +162,11 @@ export default function App() {
   };
 
   const filteredEvents = events.filter((event) => `${event.title} ${event.city} ${event.kind}`.toLowerCase().includes(query.toLowerCase()));
+  if (!authReady) return <div className="loading-screen" role="status"><span className="brand-mark"><Sparkles size={17}/></span><p>Getting your celebration space ready…</p></div>;
+  if (!user && !demoPreview) return <Landing onLogin={login} onDemo={exploreDemo} onDismiss={() => setNotice("")} busy={busy === "login"} configured={firebaseConfigured} notice={notice}/>;
   return <div className="app-shell">
     <aside className={`sidebar ${menuOpen ? "open" : ""}`} aria-label="Main navigation">
-      <div className="brand"><span className="brand-mark"><Sparkles size={17}/></span><span>gatherly<span className="brand-ai">.ai</span></span><button className="mobile-close icon-button" aria-label="Close menu" onClick={() => setMenuOpen(false)}><X size={18}/></button></div>
+      <div className="brand"><span className="brand-mark"><Sparkles size={17}/></span><span>Gatherly<span className="brand-ai"> AI</span></span><button className="mobile-close icon-button" aria-label="Close menu" onClick={() => setMenuOpen(false)}><X size={18}/></button></div>
       <div className="workspace-label">Your workspace</div>
       <nav className="nav-list">
         <button className={`nav-item ${screen === "overview" ? "selected" : ""}`} onClick={() => { setScreen("overview"); setMenuOpen(false); }}><LayoutDashboard size={17}/>Overview</button>
@@ -160,7 +181,8 @@ export default function App() {
     </aside>
     {menuOpen && <button className="mobile-scrim" aria-label="Close navigation" onClick={() => setMenuOpen(false)}></button>}
     <main className="main-content">
-      <header className="mobile-header"><button className="icon-button" aria-label="Open navigation" onClick={() => setMenuOpen(true)}><Menu size={19}/></button><span>gatherly<span className="brand-ai">.ai</span></span><button className="icon-button" aria-label="Create event" onClick={() => setDialog("event")}><Plus size={20}/></button></header>
+      {demoPreview && !user && <div className="demo-banner"><span><strong>Preview workspace</strong><small>Sample events are not saved.</small></span><button className="text-button" onClick={() => { setDemoPreview(false); setEvents([]); setActiveId(""); }}>Exit preview</button><button className="primary-button" onClick={login}><LogIn size={15}/>Sign in to save</button></div>}
+      <header className="mobile-header"><button className="icon-button" aria-label="Open navigation" onClick={() => setMenuOpen(true)}><Menu size={19}/></button><span>Gatherly<span className="brand-ai"> AI</span></span><button className="icon-button" aria-label="Create event" onClick={() => setDialog("event")}><Plus size={20}/></button></header>
       <div className="content-wrap">
         <div className="topline"><span>{screen === "overview" ? new Intl.DateTimeFormat("en-IN", { weekday: "long", month: "long", day: "numeric", year: "numeric" }).format(new Date()) : <><button className="back-link" onClick={() => setScreen("overview")}><ArrowLeft size={14}/> Events</button><span className="crumb-divider">/</span>{active?.title || "Your events"}</>}</span><button className="avatar top-avatar" aria-label={user ? `Signed in as ${user.displayName}` : "Guest profile"} onClick={user ? logout : login}>{user?.photoURL ? <img src={user.photoURL} alt=""/> : user?.displayName?.[0] || "G"}</button></div>
         {screen === "overview" ? <>
@@ -180,7 +202,7 @@ export default function App() {
               <div className="privacy-note"><span className="privacy-dot"></span><p>{demoMode ? "You're exploring with sample data. Sign in and connect Firebase to save your own events." : user ? "Your event details stay in your private workspace." : "Sign in with Google to keep your plans across devices."}</p></div>
             </aside>
           </section>
-        </> : active ? <EventWorkspace event={active} onUpdate={updateEvent} onToggleTask={toggleTask} onVendorStatus={setVendorStatus} onAI={() => setDialog("ai")} onAddGuest={() => setDialog("guest")} onAddPlaces={addPlaces} busy={busy} query={query} setQuery={setQuery} cityDraft={cityDraft || active.city} setCityDraft={setCityDraft} onLocation={requestLocation} onNotice={setNotice} /> : <div className="empty-state">No events yet. Create your first celebration to start planning.</div>}
+        </> : active ? <EventWorkspace event={active} onUpdate={updateEvent} onToggleTask={toggleTask} onVendorStatus={setVendorStatus} onAI={() => setDialog("ai")} onAddGuest={() => setDialog("guest")} onAddPlaces={addPlaces} placesConfigured={Boolean(import.meta.env.VITE_GOOGLE_MAPS_API_KEY)} busy={busy} query={query} setQuery={setQuery} cityDraft={cityDraft || active.city} setCityDraft={setCityDraft} onLocation={requestLocation} onNotice={setNotice} /> : <div className="empty-state">No events yet. Create your first celebration to start planning.</div>}
       </div>
     </main>
     {dialog === "event" && <Dialog title="A new reason to celebrate" subtitle="Let’s make a little space for something wonderful." onClose={() => setDialog(null)}><EventForm onSubmit={createEvent}/></Dialog>}
@@ -189,6 +211,20 @@ export default function App() {
     {notice && <div className="toast" role="status"><CheckCircle2 size={17}/><span>{notice}</span><button className="icon-button" aria-label="Dismiss" onClick={() => setNotice("")}><X size={15}/></button></div>}
   </div>;
 }
+
+function Landing({ onLogin, onDemo, onDismiss, busy, configured, notice }: { onLogin: () => void; onDemo: () => void; onDismiss: () => void; busy: boolean; configured: boolean; notice: string }) {
+  return <main className="landing-page">
+    <nav className="landing-nav" aria-label="Welcome navigation"><a className="landing-brand" href="#home" aria-label="Gatherly AI home"><span className="brand-mark"><Sparkles size={17}/></span><span>Gatherly<span> AI</span></span></a><div className="landing-nav-actions"><a href="#how-it-works">How it works</a><button className="landing-signin" onClick={onLogin} disabled={busy || !configured}>{busy ? <LoaderCircle className="spin" size={16}/> : <LogIn size={16}/>}Sign in</button></div></nav>
+    <section className="landing-hero" id="home"><div className="landing-copy"><p className="landing-eyebrow"><span></span> A calmer way to bring people together</p><h1>Make room for <em>the good stuff.</em></h1><p className="landing-lede">One thoughtful place to plan the celebration, find local vendors, keep your budget on track, and bring your people along.</p><div className="landing-actions"><button className="landing-google" onClick={onLogin} disabled={busy || !configured}>{busy ? <LoaderCircle className="spin" size={18}/> : <GoogleMark/>}{busy ? "Connecting to Google…" : "Continue with Google"}</button><button className="landing-preview" onClick={onDemo}>Explore sample plans<ArrowRight size={16}/></button></div><p className="landing-auth-note">New to Gatherly? Google creates your account when you continue. Your private plans sync to your account.</p>{!configured && <p className="landing-config-note" role="status">Google sign-in is not configured yet. You can still explore the sample plans.</p>}</div><div className="landing-art" role="img" aria-label="A celebration table set for a warm, intimate gathering"><div className="art-orbit orbit-one"></div><div className="art-orbit orbit-two"></div><div className="art-sun"></div><div className="art-table"><div className="art-cloth"></div><div className="art-vase"><i></i><i></i><i></i><b></b></div><div className="art-candle candle-one"></div><div className="art-candle candle-two"></div><div className="art-plate plate-one"></div><div className="art-plate plate-two"></div></div><div className="art-card"><span><Sparkles size={15}/></span><div><strong>Your plans, in one place</strong><small>Ideas · checklist · local vendors</small></div></div></div></section>
+    <section className="landing-features" aria-label="Ways Gatherly helps"><article><span className="feature-icon"><CalendarDays size={18}/></span><h2>Wedding days</h2><p>Coordinate venues, catering, guest details and the moments in between.</p></article><article><span className="feature-icon"><Sparkles size={18}/></span><h2>Birthdays & milestones</h2><p>Shape a celebration around your people, style and budget.</p></article><article><span className="feature-icon"><Compass size={18}/></span><h2>Community gatherings</h2><p>Keep local options, volunteers and next steps easy to find.</p></article></section>
+    <section className="landing-how" id="how-it-works"><div><p className="landing-eyebrow"><span></span> Thoughtful planning, one step at a time</p><h2>From first idea to <em>“see you there.”</em></h2></div><div className="how-steps"><p><CalendarDays size={18}/><strong>Start with the essentials</strong><small>Set a date, city, guest count and maximum budget.</small></p><p><Sparkles size={18}/><strong>Build a plan that fits</strong><small>Use Gemini for a first draft of ideas, budget ranges and a checklist.</small></p><p><Compass size={18}/><strong>Choose your own vendors</strong><small>Shortlist local listings and contact each vendor directly.</small></p></div></section>
+    <section className="landing-cta"><div><p className="landing-eyebrow"><span></span> Your next gathering starts here</p><h2>Ready when you are.</h2><p>Sign in to keep your event plans with you.</p></div><button className="landing-google" onClick={onLogin} disabled={busy || !configured}>{busy ? <LoaderCircle className="spin" size={18}/> : <GoogleMark/>}{busy ? "Connecting to Google…" : "Continue with Google"}</button></section>
+    <footer className="landing-footer"><a className="landing-brand" href="#home"><span className="brand-mark"><Sparkles size={16}/></span><span>Gatherly<span> AI</span></span></a><p>Plan with care. Confirm every detail directly with your vendors.</p><a href="#home">Back to top ↑</a></footer>
+    {notice && <div className="toast" role="status"><CheckCircle2 size={17}/><span>{notice}</span><button className="icon-button" aria-label="Dismiss notice" onClick={onDismiss}><X size={15}/></button></div>}
+  </main>;
+}
+
+function GoogleMark() { return <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18"><path fill="#4285F4" d="M21.35 12.2c0-.7-.06-1.37-.18-2.02H12v3.82h5.23a4.48 4.48 0 0 1-1.94 2.94v2.4h3.15c1.84-1.7 2.91-4.2 2.91-7.14Z"/><path fill="#34A853" d="M12 21.6c2.63 0 4.84-.87 6.45-2.36l-3.15-2.4c-.87.58-1.98.93-3.3.93-2.54 0-4.7-1.72-5.47-4.04H3.27v2.48A9.73 9.73 0 0 0 12 21.6Z"/><path fill="#FBBC05" d="M6.53 13.73A5.85 5.85 0 0 1 6.23 12c0-.6.1-1.18.3-1.73V7.8H3.27A9.73 9.73 0 0 0 2.23 12c0 1.57.38 3.05 1.04 4.2l3.26-2.47Z"/><path fill="#EA4335" d="M12 6.23c1.44 0 2.73.5 3.75 1.48l2.8-2.8A9.36 9.36 0 0 0 12 2.4a9.73 9.73 0 0 0-8.73 5.4l3.26 2.47c.77-2.32 2.93-4.04 5.47-4.04Z"/></svg>; }
 
 function EventCard({ event, onOpen }: { event: EventRecord; onOpen: () => void }) {
   const complete = completionPercent(event);
@@ -201,8 +237,8 @@ function EventCard({ event, onOpen }: { event: EventRecord; onOpen: () => void }
   </button>;
 }
 
-function EventWorkspace({ event, onUpdate, onToggleTask, onVendorStatus, onAI, onAddGuest, onAddPlaces, busy, query, setQuery, cityDraft, setCityDraft, onLocation, onNotice }: {
-  event: EventRecord; onUpdate: (patch: Partial<EventRecord>) => void; onToggleTask: (id: string) => void; onVendorStatus: (id: string, status: EventVendor["status"]) => void; onAI: () => void; onAddGuest: () => void; onAddPlaces: () => void; busy: string; query: string; setQuery: (q: string) => void; cityDraft: string; setCityDraft: (c: string) => void; onLocation: () => void; onNotice: (s: string) => void;
+function EventWorkspace({ event, onUpdate, onToggleTask, onVendorStatus, onAI, onAddGuest, onAddPlaces, placesConfigured, busy, query, setQuery, cityDraft, setCityDraft, onLocation, onNotice }: {
+  event: EventRecord; onUpdate: (patch: Partial<EventRecord>) => void; onToggleTask: (id: string) => void; onVendorStatus: (id: string, status: EventVendor["status"]) => void; onAI: () => void; onAddGuest: () => void; onAddPlaces: () => void; placesConfigured: boolean; busy: string; query: string; setQuery: (q: string) => void; cityDraft: string; setCityDraft: (c: string) => void; onLocation: () => void; onNotice: (s: string) => void;
 }) {
   const [tab, setTab] = useState<"overview" | "vendors" | "guests">("overview");
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -225,7 +261,7 @@ function EventWorkspace({ event, onUpdate, onToggleTask, onVendorStatus, onAI, o
         </section>
       </div><aside className="workspace-right">
         <div className="side-heading"><h2>Venue & vendor shortlist</h2><button className="text-button" onClick={() => setTab("vendors")}>See all <ArrowRight size={15}/></button></div>
-        <section className="panel vendor-panel"><div className="vendor-intro"><span className="vendor-sparkle"><Compass size={17}/></span><div><strong>Find the right people</strong><p>Shortlist local options. You confirm directly.</p></div></div><div className="location-controls"><label className="sr-only" htmlFor="vendor-city">Search area</label><input id="vendor-city" value={cityDraft} onChange={(e)=>setCityDraft(e.target.value)} placeholder="City or neighbourhood"/><button className="icon-button" aria-label="Use my location" onClick={onLocation}><MapPin size={16}/></button></div><div className="search-row"><label className="sr-only" htmlFor="vendor-category">Vendor category</label><select id="vendor-category" value={query || categories[0]} onChange={(e)=>setQuery(e.target.value)}>{categories.map((category)=><option key={category}>{category}</option>)}</select><button className="search-button" disabled={busy === "places"} onClick={onAddPlaces}>{busy === "places" ? <LoaderCircle className="spin" size={16}/> : <Search size={16}/>}<span>Find</span></button></div>
+        <section className="panel vendor-panel"><div className="vendor-intro"><span className="vendor-sparkle"><Compass size={17}/></span><div><strong>Find the right people</strong><p>Shortlist local options. You confirm directly.</p></div></div><div className="location-controls"><label className="sr-only" htmlFor="vendor-city">Search area</label><input id="vendor-city" value={cityDraft} onChange={(e)=>setCityDraft(e.target.value)} placeholder="City or neighbourhood"/><button className="icon-button" aria-label="Use my location" onClick={onLocation}><MapPin size={16}/></button></div><div className="search-row"><label className="sr-only" htmlFor="vendor-category">Vendor category</label><select id="vendor-category" value={query || categories[0]} onChange={(e)=>setQuery(e.target.value)}>{categories.map((category)=><option key={category}>{category}</option>)}</select><button className="search-button" disabled={busy === "places"} onClick={onAddPlaces}>{busy === "places" ? <LoaderCircle className="spin" size={16}/> : <Search size={16}/>}<span>Find</span></button></div>{!placesConfigured && <p className="maps-key-note">Google Maps will open now. To save listings in this shortlist, add a restricted Maps key as <code>VITE_GOOGLE_MAPS_API_KEY</code> to <code>.env.local</code>. Enable Maps JavaScript API and Places API (New); Google requires billing for Places requests.</p>}
           <div className="vendor-shortlist">{event.vendors.slice(0, 3).map((vendor) => <VendorRow key={vendor.id} vendor={vendor} expanded={expanded===vendor.id} onExpand={()=>setExpanded(expanded===vendor.id?null:vendor.id)} onStatus={onVendorStatus}/>)}</div>
           {!event.vendors.length && <div className="vendor-empty"><div className="empty-illustration"><MapPin size={20}/></div><strong>Your shortlist starts here</strong><p>Search Google Maps for local {eventKindLabel(event).toLowerCase()} vendors. Compare and contact them yourself.</p></div>}
           <button className="panel-link" onClick={()=>setTab("vendors")}>{event.vendors.length ? "Open shortlist" : "Browse vendor categories"}<ArrowRight size={15}/></button>
@@ -234,7 +270,7 @@ function EventWorkspace({ event, onUpdate, onToggleTask, onVendorStatus, onAI, o
         <div className="event-note"><Clock3 size={15}/><span>{daysUntil(event.date) < 0 ? "This date has passed" : daysUntil(event.date) === 0 ? "The celebration is today" : `${daysUntil(event.date)} days until the celebration`}</span></div>
       </aside></div>
     </>}
-    {tab === "vendors" && <section className="panel full-panel"><div className="panel-title"><div><h2>Vendor shortlist</h2><p>Interested vendors are saved here. Confirm after you contact and agree with them.</p></div></div><div className="vendor-category-chips">{categories.map((c)=><button key={c} className={`category-chip ${query===c?"selected":""}`} onClick={()=>setQuery(c)}>{c}</button>)}</div><div className="vendor-search-large"><input aria-label="City" value={cityDraft} onChange={(e)=>setCityDraft(e.target.value)} placeholder="City or neighbourhood"/><select aria-label="Vendor type" value={query || categories[0]} onChange={(e)=>setQuery(e.target.value)}>{categories.map((c)=><option key={c}>{c}</option>)}</select><button className="primary-button" disabled={busy === "places"} onClick={onAddPlaces}>{busy === "places"?<LoaderCircle className="spin" size={16}/>:<Search size={16}/>}Find local vendors</button></div>{event.vendors.length ? <div className="vendor-list">{event.vendors.map(vendor=><VendorRow key={vendor.id} vendor={vendor} expanded={expanded===vendor.id} onExpand={()=>setExpanded(expanded===vendor.id?null:vendor.id)} onStatus={onVendorStatus}/>)}</div> : <div className="empty-state wide-empty"><Compass size={22}/><strong>Your shortlist is ready for its first name.</strong><p>Choose a category and search to find local options.</p></div>}</section>}
+    {tab === "vendors" && <section className="panel full-panel"><div className="panel-title"><div><h2>Vendor shortlist</h2><p>Interested vendors are saved here. Confirm after you contact and agree with them.</p></div></div><div className="vendor-category-chips">{categories.map((c)=><button key={c} className={`category-chip ${query===c?"selected":""}`} onClick={()=>setQuery(c)}>{c}</button>)}</div><div className="vendor-search-large"><input aria-label="City" value={cityDraft} onChange={(e)=>setCityDraft(e.target.value)} placeholder="City or neighbourhood"/><select aria-label="Vendor type" value={query || categories[0]} onChange={(e)=>setQuery(e.target.value)}>{categories.map((c)=><option key={c}>{c}</option>)}</select><button className="primary-button" disabled={busy === "places"} onClick={onAddPlaces}>{busy === "places"?<LoaderCircle className="spin" size={16}/>:<Search size={16}/>}Find local vendors</button></div>{!placesConfigured && <p className="maps-key-note">Live listings in the app need a restricted Google Maps browser key in <code>.env.local</code> under <code>VITE_GOOGLE_MAPS_API_KEY</code>. Maps JavaScript API and Places API (New) must be enabled, and Places requires billing. The Find button opens the same query in Google Maps while the key is missing.</p>}{event.vendors.length ? <div className="vendor-list">{event.vendors.map(vendor=><VendorRow key={vendor.id} vendor={vendor} expanded={expanded===vendor.id} onExpand={()=>setExpanded(expanded===vendor.id?null:vendor.id)} onStatus={onVendorStatus}/>)}</div> : <div className="empty-state wide-empty"><Compass size={22}/><strong>Your shortlist is ready for its first name.</strong><p>Choose a category and search to find local options.</p></div>}</section>}
     {tab === "guests" && <section className="panel full-panel"><div className="panel-title"><div><h2>The people who make it special</h2><p>{event.guestsList.length} guests · invitations are opened and sent by you</p></div><button className="primary-button" onClick={onAddGuest}><Plus size={16}/>Add guests</button></div>{event.guestsList.length ? <div className="guest-list">{event.guestsList.map(guest=><div className="guest-row" key={guest.id}><span className="guest-avatar">{guest.name[0]}</span><span className="guest-name"><strong>{guest.name}</strong><small>{guest.email || "No email added"}</small></span><span className={`guest-status ${guest.invited?"sent":"pending"}`}>{guest.invited?"Invitation prepared":"Not invited"}</span><a className="outline-button compact" href={emailInviteUrl(event, guest.name, guest.email)} onClick={()=>onUpdate({ guestsList:event.guestsList.map(item=>item.id===guest.id?{...item,invited:true}:item)})}><Send size={14}/>Prepare invite</a></div>)}</div> : <div className="empty-state wide-empty"><Users size={22}/><strong>Every good gathering starts with its people.</strong><p>Add guests, then open a personal invitation in your email app.</p><button className="outline-button" onClick={onAddGuest}><Plus size={15}/>Add first guest</button></div>}</section>}
   </>;
 }
