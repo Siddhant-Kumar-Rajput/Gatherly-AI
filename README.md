@@ -4,7 +4,7 @@ Gatherly AI is a responsive event-planning workspace for weddings, birthdays, co
 
 ## What works
 
-- A public welcome page with Google sign-in and a clearly labelled, opt-in sample workspace.
+- A public landing page with Google sign-in, plus persistent About, Privacy, and Terms pages.
 - Google sign-in and a private Firestore workspace when Firebase is configured.
 - Event-specific vendor categories; optional Google Places search; users contact and confirm vendors themselves.
 - Gemini first-draft plans with budget, contingency, timeline tasks, and vendor categories. Figures are planning estimates, never quotes or confirmed availability.
@@ -23,7 +23,7 @@ npm test
 npm run build
 ```
 
-Copy `.env.example` to `.env.local`. Firebase values are web-app configuration, not server secrets. The app falls back to clearly labelled sample data until a Firebase web app is configured. Set `VITE_DEMO_MODE=false` for an authenticated workspace. Enable Google as a sign-in provider and create Firestore in the Firebase console. Publish the included `firestore.rules` before using the app.
+Copy `.env.example` to `.env.local`. Firebase values are web-app configuration, not server secrets. The planner never creates sample events. Without Firebase configuration, the landing page stays available and the sign-in action explains what setup is missing. Enable Google as a sign-in provider and create Firestore in the Firebase console. Publish the included `firestore.rules` before using the app.
 
 ### Google services
 
@@ -48,7 +48,7 @@ Add the deployed domain to Firebase Auth authorized domains and to the Maps key 
 
 ## Data and privacy notes
 
-This client-only prototype stores signed-in events in the user's Firestore path. The AI prompt sends event type, city, event date, guest count, budget, style, and optional notes to Gemini through Firebase AI Logic. Do not put guest names, email addresses, or phone numbers in AI notes. Sample vendors and people are illustrative. Google Places listing content is supplied by Google and should be treated as a listing, not a verified recommendation. Add a privacy notice and production support/retention policy before public use.
+This client-only prototype stores signed-in events in the user's Firestore path. The AI prompt sends event type, city, event date, guest count, budget, style, and optional notes to Gemini through Firebase AI Logic. Do not put guest names, email addresses, or phone numbers in AI notes. Google Places listing content is supplied by Google and should be treated as a listing, not a verified recommendation. Review and update the Privacy page and data-retention process before public use.
 
 ## Repository size
 

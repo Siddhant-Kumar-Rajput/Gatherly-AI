@@ -7,4 +7,3 @@ const firebaseConfig = {
 };
 
 export const firebaseConfigured = Boolean(firebaseConfig.apiKey && firebaseConfig.authDomain && firebaseConfig.projectId && firebaseConfig.appId);
-export const demoMode = !firebaseConfigured || env.VITE_DEMO_MODE === "true";
