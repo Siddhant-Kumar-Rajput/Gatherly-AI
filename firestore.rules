@@ -1,0 +1,44 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedInAs(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    match /users/{uid} {
+      allow read: if signedInAs(uid);
+      allow create, update: if signedInAs(uid)
+        && request.resource.data.uid == uid
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() <= 120
+        && request.resource.data.email is string
+        && request.resource.data.email.size() <= 254;
+      allow delete: if false;
+
+      match /events/{eventId} {
+        allow read, delete: if signedInAs(uid);
+        allow create, update: if signedInAs(uid)
+          && request.resource.data.id == eventId
+          && request.resource.data.title is string
+          && request.resource.data.title.size() > 0
+          && request.resource.data.title.size() <= 100
+          && request.resource.data.city is string
+          && request.resource.data.city.size() <= 120
+          && request.resource.data.guests is int
+          && request.resource.data.guests >= 1
+          && request.resource.data.guests <= 100000
+          && request.resource.data.budget is number
+          && request.resource.data.budget >= 0
+          && request.resource.data.budget <= 1000000000
+          && request.resource.data.vendors is list
+          && request.resource.data.vendors.size() <= 100
+          && request.resource.data.guestsList is list
+          && request.resource.data.guestsList.size() <= 1000
+          && request.resource.data.tasks is list
+          && request.resource.data.tasks.size() <= 100
+          && request.resource.data.budgetLines is list
+          && request.resource.data.budgetLines.size() <= 50;
+      }
+    }
+  }
+}
