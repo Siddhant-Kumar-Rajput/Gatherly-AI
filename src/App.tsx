@@ -12,8 +12,8 @@ const newId = () => crypto.randomUUID();
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
-  const [events, setEvents] = useState<EventRecord[]>(DEMO_EVENTS);
-  const [activeId, setActiveId] = useState(DEMO_EVENTS[1].id);
+  const [events, setEvents] = useState<EventRecord[]>(demoMode ? DEMO_EVENTS : []);
+  const [activeId, setActiveId] = useState(demoMode ? DEMO_EVENTS[1].id : "");
   const [screen, setScreen] = useState<"overview" | "event">("overview");
   const [dialog, setDialog] = useState<"event" | "ai" | "guest" | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -31,7 +31,17 @@ export default function App() {
       if (cancelled || !auth) return;
       return import("firebase/auth").then(({ onAuthStateChanged }) => {
         if (cancelled) return;
-        unsubscribe = onAuthStateChanged(auth, (signed) => setUser(signed ? { uid: signed.uid, displayName: signed.displayName || "Gatherly member", email: signed.email || "", photoURL: signed.photoURL || undefined } : null));
+      unsubscribe = onAuthStateChanged(auth, (signed) => {
+        setUser(signed ? { uid: signed.uid, displayName: signed.displayName || "Gatherly member", email: signed.email || "", photoURL: signed.photoURL || undefined } : null);
+        setEvents(signed ? [] : DEMO_EVENTS);
+        setActiveId(signed ? "" : DEMO_EVENTS[1].id);
+        if (signed) {
+          setActiveId("");
+          setScreen("overview");
+          setDialog(null);
+          setMenuOpen(false);
+        }
+      });
       });
     }).catch(() => setNotice("Firebase could not initialize. Check your project configuration."));
     return () => { cancelled = true; unsubscribe(); };
@@ -43,10 +53,9 @@ export default function App() {
     void import("./lib/firebase").then(({ watchEvents }) => {
       if (cancelled) return;
       unsubscribe = watchEvents(user.uid, (cloudEvents) => {
-        setEvents((current) => {
-          const samples = current.filter((event) => event.isSample);
-          return [...samples, ...cloudEvents.map((event) => ({ ...event, isSample: false }))];
-        });
+        const syncedEvents = cloudEvents.map((event) => ({ ...event, isSample: false }));
+        setEvents(syncedEvents);
+        setActiveId((current) => syncedEvents.some((event) => event.id === current) ? current : syncedEvents[0]?.id || "");
       }, () => setNotice("Could not sync your events. Check your Firestore rules and connection."));
     }).catch(() => setNotice("Cloud sync could not start. Check your Firebase configuration."));
     return () => { cancelled = true; unsubscribe(); };
@@ -68,7 +77,7 @@ export default function App() {
     finally { setBusy(""); }
   };
 
-  const logout = async () => { const { signOutUser } = await import("./lib/firebase"); await signOutUser(); setUser(null); setNotice("You are signed out. Sample events remain available."); };
+  const logout = async () => { const { signOutUser } = await import("./lib/firebase"); await signOutUser(); setUser(null); setEvents(DEMO_EVENTS); setActiveId(DEMO_EVENTS[1].id); setScreen("overview"); setNotice("You are signed out. Sample events remain available."); };
 
   const createEvent = (form: FormData) => {
     const kind = form.get("kind") as EventKind;
@@ -153,29 +162,29 @@ export default function App() {
     <main className="main-content">
       <header className="mobile-header"><button className="icon-button" aria-label="Open navigation" onClick={() => setMenuOpen(true)}><Menu size={19}/></button><span>gatherly<span className="brand-ai">.ai</span></span><button className="icon-button" aria-label="Create event" onClick={() => setDialog("event")}><Plus size={20}/></button></header>
       <div className="content-wrap">
-        <div className="topline"><span>{screen === "overview" ? new Intl.DateTimeFormat("en-IN", { weekday: "long", month: "long", day: "numeric", year: "numeric" }).format(new Date()) : <><button className="back-link" onClick={() => setScreen("overview")}><ArrowLeft size={14}/> Events</button><span className="crumb-divider">/</span>{active.title}</>}</span><button className="avatar top-avatar" aria-label={user ? `Signed in as ${user.displayName}` : "Guest profile"} onClick={user ? logout : login}>{user?.photoURL ? <img src={user.photoURL} alt=""/> : user?.displayName?.[0] || "G"}</button></div>
+        <div className="topline"><span>{screen === "overview" ? new Intl.DateTimeFormat("en-IN", { weekday: "long", month: "long", day: "numeric", year: "numeric" }).format(new Date()) : <><button className="back-link" onClick={() => setScreen("overview")}><ArrowLeft size={14}/> Events</button><span className="crumb-divider">/</span>{active?.title || "Your events"}</>}</span><button className="avatar top-avatar" aria-label={user ? `Signed in as ${user.displayName}` : "Guest profile"} onClick={user ? logout : login}>{user?.photoURL ? <img src={user.photoURL} alt=""/> : user?.displayName?.[0] || "G"}</button></div>
         {screen === "overview" ? <>
           <section className="greeting-row"><div><h1>Make room for <em>the good stuff.</em></h1><p className="subtitle">The details are in good hands. Here’s what’s taking shape.</p></div><button className="primary-button" onClick={() => setDialog("event")}><Plus size={17}/>Plan an event</button></section>
           <section className="overview-layout">
             <div className="overview-main">
-              <div className="section-head"><div><h2>Your celebrations</h2><p>Every gathering, thoughtfully in progress.</p></div><button className="text-button" onClick={() => setScreen("event")}>All events <ArrowRight size={15}/></button></div>
+              <div className="section-head"><div><h2>{user ? "Your celebrations" : "Sample celebrations"}</h2><p>{user ? "Every gathering, thoughtfully in progress." : "A preview workspace. Sign in to plan your own events."}</p></div><button className="text-button" onClick={() => setScreen("event")}>All events <ArrowRight size={15}/></button></div>
               <div className="event-grid">{filteredEvents.map((event) => <EventCard key={event.id} event={event} onOpen={() => { setActiveId(event.id); setScreen("event"); }} />)}</div>
-              {filteredEvents.length === 0 && <div className="empty-state">No events match “{query}”. Try another search.</div>}
+              {filteredEvents.length === 0 && <div className="empty-state">{query ? `No events match “${query}”. Try another search.` : "No events yet. Create your first celebration to get started."}</div>}
               <div className="section-head upcoming-title"><div><h2>Coming up next</h2><p>A quick look at what needs your attention.</p></div><button className="circle-arrow" aria-label="View next event" onClick={() => { const next = [...events].sort((a,b) => a.date.localeCompare(b.date))[0]; if(next){setActiveId(next.id);setScreen("event");}}}><ArrowDownRight size={17}/></button></div>
               <div className="task-preview">{events.flatMap((event) => event.tasks.filter((task) => !task.done).map((task) => ({ ...task, eventTitle: event.title, eventId: event.id }))).slice(0, 4).map((task) => <button className="task-row" key={`${task.eventId}-${task.id}`} onClick={() => { setActiveId(task.eventId); setScreen("event"); }}><span className="task-check"></span><span className="task-main"><strong>{task.title}</strong><small>{task.eventTitle}</small></span><span className="task-date">{formatEventDate(task.dueDate, { day: "numeric", month: "short" })}</span><ChevronRight size={15}/></button>)}{events.every((event) => event.tasks.every((task) => task.done)) && <div className="empty-state">You’re all caught up. Add an event to start planning.</div>}</div>
             </div>
             <aside className="overview-rail">
               <div className="section-head rail-heading"><div><h2>At a glance</h2><p>Your planning, in a nutshell.</p></div></div>
               <div className="glance-card"><div className="glance-top"><span className="glance-icon"><CalendarDays size={17}/></span><span>In the calendar</span></div><div className="glance-number">{events.length} <small>events</small></div><div className="glance-divider"></div><div className="glance-facts"><span>Next celebration</span><strong>{events.length ? [...events].sort((a,b)=>a.date.localeCompare(b.date))[0].title : "Nothing planned yet"}</strong></div></div>
-              <div className="rail-section-title">A helpful nudge</div><div className="nudge-card"><span className="nudge-icon"><Sparkles size={17}/></span><h3>Start with the big three.</h3><p>Set your date, guest count, and budget. Gatherly can turn them into a first-pass plan in moments.</p><button className="text-button" onClick={() => setDialog("ai")}>Try AI planner <ArrowRight size={15}/></button></div>
+              <div className="rail-section-title">A helpful nudge</div><div className="nudge-card"><span className="nudge-icon"><Sparkles size={17}/></span><h3>Start with the big three.</h3><p>Set your date, guest count, and budget. Gatherly can turn them into a first-pass plan in moments.</p><button className="text-button" onClick={() => events.length ? setDialog("ai") : setDialog("event")}>{events.length ? "Try AI planner" : "Plan your first event"} <ArrowRight size={15}/></button></div>
               <div className="privacy-note"><span className="privacy-dot"></span><p>{demoMode ? "You're exploring with sample data. Sign in and connect Firebase to save your own events." : user ? "Your event details stay in your private workspace." : "Sign in with Google to keep your plans across devices."}</p></div>
             </aside>
           </section>
-        </> : <EventWorkspace event={active} onUpdate={updateEvent} onToggleTask={toggleTask} onVendorStatus={setVendorStatus} onAI={() => setDialog("ai")} onAddGuest={() => setDialog("guest")} onAddPlaces={addPlaces} busy={busy} query={query} setQuery={setQuery} cityDraft={cityDraft || active.city} setCityDraft={setCityDraft} onLocation={requestLocation} onNotice={setNotice} />}
+        </> : active ? <EventWorkspace event={active} onUpdate={updateEvent} onToggleTask={toggleTask} onVendorStatus={setVendorStatus} onAI={() => setDialog("ai")} onAddGuest={() => setDialog("guest")} onAddPlaces={addPlaces} busy={busy} query={query} setQuery={setQuery} cityDraft={cityDraft || active.city} setCityDraft={setCityDraft} onLocation={requestLocation} onNotice={setNotice} /> : <div className="empty-state">No events yet. Create your first celebration to start planning.</div>}
       </div>
     </main>
     {dialog === "event" && <Dialog title="A new reason to celebrate" subtitle="Let’s make a little space for something wonderful." onClose={() => setDialog(null)}><EventForm onSubmit={createEvent}/></Dialog>}
-    {dialog === "ai" && <Dialog title="Your plan, with a little help" subtitle="A useful first draft. You stay in charge of every decision." onClose={() => setDialog(null)}><AIForm event={active} busy={busy === "ai"} onSubmit={runAI}/></Dialog>}
+    {dialog === "ai" && active && <Dialog title="Your plan, with a little help" subtitle="A useful first draft. You stay in charge of every decision." onClose={() => setDialog(null)}><AIForm event={active} busy={busy === "ai"} onSubmit={runAI}/></Dialog>}
     {dialog === "guest" && <Dialog title="Who’s on the list?" subtitle="Add people one at a time. Invitations are always sent by you." onClose={() => setDialog(null)}><GuestForm onSubmit={addGuest}/></Dialog>}
     {notice && <div className="toast" role="status"><CheckCircle2 size={17}/><span>{notice}</span><button className="icon-button" aria-label="Dismiss" onClick={() => setNotice("")}><X size={15}/></button></div>}
   </div>;
