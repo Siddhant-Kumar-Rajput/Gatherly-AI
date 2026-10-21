@@ -23,7 +23,7 @@ npm test
 npm run build
 ```
 
-Copy `.env.example` to `.env.local`. Firebase values are web-app configuration, not server secrets. Add a Gemini AI Studio key as `VITE_GEMINI_API_KEY` to enable AI planning and Maps-grounded place discovery. Vite embeds `VITE_` values in the browser bundle; restrict the key to the Gemini API where available and set account quotas. Do not commit `.env.local`. The planner never creates sample events. Without Firebase configuration, the landing page stays available and the sign-in action explains what setup is missing. Enable Google as a sign-in provider and create Firestore in the Firebase console. Publish the included `firestore.rules` before using the app.
+Copy `.env.example` to `.env.local`. Firebase values are web-app configuration, not server secrets. Add up to three Gemini AI Studio keys as `VITE_GEMINI_API_KEY`, `VITE_GEMINI_API_KEY_2`, and `VITE_GEMINI_API_KEY_3` to enable AI planning and Maps-grounded place discovery. Place discovery tries each key when a prior key is unavailable. Vite embeds `VITE_` values in the browser bundle; restrict keys to the Gemini API where available and set account quotas. Multiple keys in one Google Cloud project can share the same quota. Do not commit `.env.local`. The planner never creates sample events. Without Firebase configuration, the landing page stays available and the sign-in action explains what setup is missing. Enable Google as a sign-in provider and create Firestore in the Firebase console. Publish the included `firestore.rules` before using the app.
 
 ### Google services
 

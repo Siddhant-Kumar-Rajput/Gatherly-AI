@@ -11,10 +11,14 @@ type Interaction = {
   steps?: Array<{ type?: string; content?: Array<{ type?: string; text?: string; annotations?: Array<{ type?: string; name?: string; url?: string }> }> }>;
 };
 
-const API_KEY = import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
+const API_KEYS = [
+  import.meta.env.VITE_GEMINI_API_KEY,
+  import.meta.env.VITE_GEMINI_API_KEY_2,
+  import.meta.env.VITE_GEMINI_API_KEY_3,
+].filter((key): key is string => typeof key === "string" && key.trim().length > 0);
 const MODEL = "gemini-3.8-flash";
 
-export const groundedPlacesConfigured = Boolean(API_KEY);
+export const groundedPlacesConfigured = API_KEYS.length > 0;
 
 export async function searchGroundedPlaces({
   category,
@@ -27,22 +31,31 @@ export async function searchGroundedPlaces({
   coordinates?: { latitude: number; longitude: number };
   excludeNames?: string[];
 }): Promise<GroundedPlace[]> {
-  if (!API_KEY) throw new Error("Gemini place search is not configured yet.");
+  if (!API_KEYS.length) throw new Error("Gemini place search is not configured yet.");
 
   const exclusions = excludeNames.length
     ? `Do not repeat these places: ${excludeNames.slice(-30).join("; ")}. Find different options if available.`
     : "";
   const prompt = `Find up to five real ${category} places in or near ${location}. Return a concise, useful list of distinct places suitable for someone planning an event. Include only places you can ground in Google Maps. ${exclusions} If fewer than five suitable places are available, return fewer. Do not invent ratings, photos, phone numbers, or addresses.`;
 
-  const response = await fetch("https://generativelanguage.googleapis.com/v1beta/interactions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-goog-api-key": API_KEY },
-    body: JSON.stringify({ model: MODEL, input: prompt, tools: [{ type: "google_maps", ...coordinates }] }),
-  });
-  if (!response.ok) {
-    if (response.status === 429) throw new Error("Gemini search is at its current rate limit. Please try again later.");
-    if (response.status === 403) throw new Error("Gemini Maps grounding is unavailable for this key or model. Check AI Studio access and quotas.");
-    throw new Error(`Gemini place search failed (${response.status}). Please try again.`);
+  let response: Response | undefined;
+  for (const apiKey of API_KEYS) {
+    try {
+      response = await fetch("https://generativelanguage.googleapis.com/v1beta/interactions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+        body: JSON.stringify({ model: MODEL, input: prompt, tools: [{ type: "google_maps", ...coordinates }] }),
+      });
+    } catch {
+      continue;
+    }
+    if (response.ok) break;
+    if (![403, 429, 500, 502, 503, 504].includes(response.status)) break;
+  }
+  if (!response?.ok) {
+    if (response?.status === 429) throw new Error("Gemini Maps grounding quota is unavailable for all configured keys. Keys in the same Google Cloud project may share the same quota.");
+    if (response?.status === 403) throw new Error("Gemini Maps grounding is unavailable for these keys or the current account tier. Check AI Studio access and quotas.");
+    throw new Error(`Gemini place search failed${response ? ` (${response.status})` : " because the API could not be reached"}. Please try again.`);
   }
 
   const payload = await response.json() as Interaction;
