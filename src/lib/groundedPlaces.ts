@@ -8,10 +8,6 @@ export interface GroundedPlace {
   source: "google" | "openstreetmap";
 }
 
-type Interaction = {
-  steps?: Array<{ type?: string; content?: Array<{ type?: string; text?: string; annotations?: Array<{ type?: string; name?: string; url?: string }> }> }>;
-};
-
 type PhotonFeature = {
   geometry?: { coordinates?: [number, number] };
   properties?: {
@@ -30,12 +26,6 @@ type PhotonFeature = {
   };
 };
 
-const API_KEYS = [
-  import.meta.env.VITE_GEMINI_API_KEY,
-  import.meta.env.VITE_GEMINI_API_KEY_2,
-  import.meta.env.VITE_GEMINI_API_KEY_3,
-].filter((key): key is string => typeof key === "string" && key.trim().length > 0);
-const MODEL = "gemini-3.8-flash";
 const PHOTON_API = "https://photon.komoot.io/api/";
 const resultCache = new Map<string, { savedAt: number; places: GroundedPlace[] }>();
 
@@ -57,6 +47,26 @@ function mapUrl(name: string, address: string): string {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([name, address].filter(Boolean).join(", "))}`;
 }
 
+function matchesPlaceType(category: string, properties: NonNullable<PhotonFeature["properties"]>): boolean {
+  const key = properties.osm_key?.toLowerCase();
+  const value = properties.osm_value?.toLowerCase();
+  const normalized = category.toLocaleLowerCase();
+  if (/cafe|coffee/.test(normalized)) return (key === "amenity" && value === "cafe") || (key === "shop" && ["coffee", "tea"].includes(value || ""));
+  if (/cake|baker/.test(normalized)) return key === "shop" && value === "bakery";
+  if (/restaurant|cater|buffet|food/.test(normalized)) return key === "amenity" && ["restaurant", "fast_food", "food_court", "catering"].includes(value || "");
+  return true;
+}
+
+function distanceKm(a: [number, number], b: [number, number]): number {
+  const radians = (degrees: number) => degrees * Math.PI / 180;
+  const [lon1, lat1] = a.map(radians);
+  const [lon2, lat2] = b.map(radians);
+  const dLat = lat2 - lat1;
+  const dLon = lon2 - lon1;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  return 6371 * 2 * Math.asin(Math.sqrt(h));
+}
+
 function getUniquePlaces(places: GroundedPlace[], excludeNames: string[]): GroundedPlace[] {
   const excluded = new Set(excludeNames.map((name) => name.trim().toLocaleLowerCase()));
   const seen = new Set<string>();
@@ -68,66 +78,18 @@ function getUniquePlaces(places: GroundedPlace[], excludeNames: string[]): Groun
   }).slice(0, 5);
 }
 
-async function searchGoogleMapsGrounded({ category, location, coordinates, excludeNames }: {
-  category: string;
-  location: string;
-  coordinates?: { latitude: number; longitude: number };
-  excludeNames: string[];
-}): Promise<GroundedPlace[]> {
-  if (!API_KEYS.length) return [];
-  const exclusions = excludeNames.length ? ` Do not repeat these places: ${excludeNames.slice(-30).join("; ")}.` : "";
-  const prompt = `Find up to five real ${category} places in or near ${location}. Return concise distinct places suitable for someone planning an event. Include only places you can ground in Google Maps.${exclusions} Return fewer when needed. Do not invent businesses, ratings, photos, phone numbers, or addresses.`;
-  for (const apiKey of API_KEYS) {
-    try {
-      const response = await fetch("https://generativelanguage.googleapis.com/v1beta/interactions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-        body: JSON.stringify({ model: MODEL, input: prompt, tools: [{ type: "google_maps", ...coordinates }] }),
-        signal: AbortSignal.timeout(12_000),
-      });
-      if (!response.ok) {
-        // Grounding quota is shared across keys in one Google project; avoid three identical 403/429 retries.
-        if (response.status === 403 || response.status === 429) break;
-        continue;
-      }
-      const payload = await response.json() as Interaction;
-      const blocks = (payload.steps || []).filter((step) => step.type === "model_output").flatMap((step) => step.content || []);
-      const annotations = blocks.flatMap((block) => block.annotations || []).filter((item) => {
-        if (item.type !== "place_citation" || !item.name || !item.url) return false;
-        try {
-          const url = new URL(item.url);
-          return url.protocol === "https:" && (url.hostname === "google.com" || url.hostname.endsWith(".google.com") || url.hostname === "maps.app.goo.gl");
-        } catch { return false; }
-      });
-      const seen = new Set<string>();
-      const places = annotations.flatMap((item) => {
-        const key = item.name!.trim().toLocaleLowerCase();
-        if (seen.has(key)) return [];
-        seen.add(key);
-        const escaped = item.name!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        const text = blocks.filter((block) => block.type === "text").map((block) => block.text || "").join("\n");
-        const context = text.match(new RegExp(`${escaped}[^\\n.]{0,180}`, "i"))?.[0];
-        return [{ id: item.url!, name: item.name!, mapsUrl: item.url!, description: context && context !== item.name ? context.trim() : undefined, source: "google" as const }];
-      });
-      if (places.length) return getUniquePlaces(places, excludeNames);
-    } catch {
-      // The no-key Photon fallback below keeps discovery usable when Maps grounding is blocked.
-    }
-  }
-  return [];
-}
-
 async function searchPhotonPlaces(category: string, location: string, coordinates?: { latitude: number; longitude: number }): Promise<GroundedPlace[]> {
   let latitude = coordinates?.latitude;
   let longitude = coordinates?.longitude;
 
   if (latitude === undefined || longitude === undefined) {
     const geocodeUrl = new URL(PHOTON_API);
-    geocodeUrl.search = new URLSearchParams({ q: location, limit: "1", lang: "en" }).toString();
+    geocodeUrl.search = new URLSearchParams({ q: location, limit: "5", lang: "en" }).toString();
     const geocodeResponse = await fetch(geocodeUrl, { signal: AbortSignal.timeout(10_000) });
     if (!geocodeResponse.ok) throw new Error("Could not look up that city. Check the spelling or add the state or country.");
     const geocode = await geocodeResponse.json() as { features?: PhotonFeature[] };
-    const city = geocode.features?.find((feature) => feature.geometry?.coordinates?.length === 2);
+    const city = geocode.features?.find((feature) => feature.geometry?.coordinates?.length === 2 && /city|town|village|municipality|suburb|neighbourhood|postcode/.test(feature.properties?.osm_value || ""))
+      || geocode.features?.find((feature) => feature.geometry?.coordinates?.length === 2);
     if (!city?.geometry?.coordinates) throw new Error("Could not find that city. Check the spelling or include the state or country.");
     [longitude, latitude] = city.geometry.coordinates;
   }
@@ -137,16 +99,22 @@ async function searchPhotonPlaces(category: string, location: string, coordinate
     q: photonCategory(category),
     lat: String(latitude),
     lon: String(longitude),
-    zoom: coordinates ? "14" : "12",
-    limit: "30",
+    zoom: coordinates ? "14" : "13",
+    limit: "50",
     lang: "en",
   }).toString();
   const response = await fetch(searchUrl, { signal: AbortSignal.timeout(12_000) });
   if (!response.ok) throw new Error("Local place search is temporarily unavailable. Please try again in a moment.");
   const payload = await response.json() as { features?: PhotonFeature[] };
+  const center: [number, number] = [longitude!, latitude!];
+  // Photon does fuzzy text matching. Bound results to the searched area and enforce
+  // strict OSM categories for the common cafe/restaurant mix-up.
+  const maxDistanceKm = coordinates ? 15 : 30;
   return (payload.features || []).flatMap((feature) => {
     const properties = feature.properties;
-    if (!properties?.name || !properties.osm_id || !properties.osm_type) return [];
+    const point = feature.geometry?.coordinates;
+    if (!properties?.name || !properties.osm_id || !properties.osm_type || !point) return [];
+    if (distanceKm(center, point) > maxDistanceKm || !matchesPlaceType(category, properties)) return [];
     const address = [properties.housenumber, properties.street, properties.district || properties.locality, properties.city, properties.state, properties.postcode].filter(Boolean).join(", ");
     const detail = [properties.osm_value?.replaceAll("_", " "), address].filter(Boolean).join(" · ");
     return [{
@@ -177,11 +145,8 @@ export async function searchGroundedPlaces({
   const cached = resultCache.get(cacheKey);
   if (cached && Date.now() - cached.savedAt < 10 * 60_000) return getUniquePlaces(cached.places, excludeNames);
 
-  const googlePlaces = await searchGoogleMapsGrounded({ category: category.trim(), location: location.trim(), coordinates, excludeNames });
-  const places = googlePlaces.length ? googlePlaces : await searchPhotonPlaces(category.trim(), location.trim(), coordinates);
-  if (!googlePlaces.length) {
-    resultCache.set(cacheKey, { savedAt: Date.now(), places });
-    if (resultCache.size > 30) resultCache.delete(resultCache.keys().next().value!);
-  }
+  const places = await searchPhotonPlaces(category.trim(), location.trim(), coordinates);
+  resultCache.set(cacheKey, { savedAt: Date.now(), places });
+  if (resultCache.size > 30) resultCache.delete(resultCache.keys().next().value!);
   return getUniquePlaces(places, excludeNames);
 }

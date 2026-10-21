@@ -7,11 +7,14 @@ const cityFeature = {
 };
 
 function cafeFeatures() {
-  return Array.from({ length: 7 }, (_, index) => ({
+  return [...Array.from({ length: 7 }, (_, index) => ({
     type: "Feature",
     properties: { name: `Cafe ${index + 1}`, osm_type: "N", osm_id: index + 10, osm_key: "amenity", osm_value: "cafe", street: "Market Road", city: "Test City" },
     geometry: { type: "Point", coordinates: [77.6 + index / 100, 12.9] },
-  }));
+  })),
+  { type: "Feature", properties: { name: "Nearby restaurant", osm_type: "N", osm_id: 40, osm_key: "amenity", osm_value: "restaurant", city: "Test City" }, geometry: { type: "Point", coordinates: [77.61, 12.9] } },
+  { type: "Feature", properties: { name: "Cafe in another city", osm_type: "N", osm_id: 41, osm_key: "amenity", osm_value: "cafe", city: "Elsewhere" }, geometry: { type: "Point", coordinates: [90, 23] } },
+  ];
 }
 
 describe("searchGroundedPlaces", () => {
@@ -44,10 +47,9 @@ describe("searchGroundedPlaces", () => {
     expect(placeRequestUrl.searchParams.get("lon")).toBe("77.6");
   });
 
-  it("falls back to OpenStreetMap when Google Maps grounding is denied", async () => {
+  it("uses local OpenStreetMap results even when a Gemini key is configured", async () => {
     vi.stubEnv("VITE_GEMINI_API_KEY", "test-only-key");
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: "Grounding unavailable on free tier" } }), { status: 403 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ features: [cityFeature] }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ features: cafeFeatures() }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
@@ -57,7 +59,8 @@ describe("searchGroundedPlaces", () => {
 
     expect(places).toHaveLength(5);
     expect(places[0].source).toBe("openstreetmap");
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(places.every((place) => place.name !== "Nearby restaurant" && place.name !== "Cafe in another city")).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("reports a useful message if the city cannot be found", async () => {
