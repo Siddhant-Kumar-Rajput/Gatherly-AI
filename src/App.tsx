@@ -143,13 +143,16 @@ export default function App() {
   };
 
   const addPlaces = async (nextPage = false) => {
-    if (!cityDraft.trim()) { setNotice("Enter a city or neighbourhood to search for local vendors."); return; }
+    // The event workspace displays the saved city when the editable draft is blank.
+    // Use the same fallback here so the visible city is also the searched city.
+    const searchLocation = cityDraft.trim() || active.city.trim();
+    if (!searchLocation) { setNotice("Enter a city or neighbourhood to search for local vendors."); return; }
     const category = query || active.vendorCategories[0] || "event vendors";
     setBusy("places");
     try {
       const { searchGroundedPlaces } = await import("./lib/groundedPlaces");
       const previous = nextPage ? placeResults : [];
-      const places = await searchGroundedPlaces({ category, location: cityDraft, coordinates: locationCoordinates, excludeNames: previous.map((place) => place.name) });
+      const places = await searchGroundedPlaces({ category, location: searchLocation, coordinates: locationCoordinates, excludeNames: previous.map((place) => place.name) });
       setPlaceResults(nextPage ? [...previous, ...places.filter((place) => !previous.some((old) => old.mapsUrl === place.mapsUrl))] : places);
       setPlacePage(nextPage ? placePage + 1 : 1);
       if (nextPage && !places.length) setNotice("No more distinct grounded places came back for this search.");

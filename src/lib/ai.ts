@@ -24,14 +24,26 @@ const planSchema = Schema.object({
   },
 });
 
+const PLAN_ATTEMPTS = ["gemini-3.8-flash", "gemini-3.8-flash", "gemini-3.5-flash-lite"] as const;
+
+function isTransientModelError(error: unknown): boolean {
+  const candidate = error as { code?: unknown; status?: unknown; message?: unknown };
+  const details = `${candidate?.code ?? ""} ${candidate?.status ?? ""} ${candidate?.message ?? error ?? ""}`.toLowerCase();
+  return /\b503\b|unavailable|overloaded|temporarily unavailable/.test(details);
+}
+
+async function generateWithModel(ai: ReturnType<typeof getAI>, modelName: string, prompt: string) {
+  const model = getGenerativeModel(ai, {
+    model: modelName,
+    generationConfig: { responseMimeType: "application/json", responseSchema: planSchema },
+  });
+  return model.generateContent(prompt);
+}
+
 export async function generateEventPlan(event: Pick<EventRecord, "kind" | "customKind" | "date" | "city" | "guests" | "budget" | "style">, extraNotes = ""): Promise<EventPlan> {
   if (!firebaseConfigured) throw new Error("Connect a Firebase project and enable Firebase AI Logic to use the AI planner.");
   if (!firebaseApp) throw new Error("Firebase AI Logic is not configured yet.");
   const ai = getAI(firebaseApp, { backend: new GoogleAIBackend() });
-  const model = getGenerativeModel(ai, {
-    model: "gemini-3.8-flash",
-    generationConfig: { responseMimeType: "application/json", responseSchema: planSchema },
-  });
   const safeNotes = extraNotes.trim().slice(0, 600).replace(/[<>]/g, "");
   const eventType = event.kind === "Custom" ? event.customKind || "custom event" : event.kind;
   const prompt = `You are Gatherly AI, a practical event planning assistant. Create an editable first-pass plan for a ${eventType} in ${event.city}. Date: ${event.date}. Guest count: ${event.guests}. User's maximum total budget: INR ${event.budget}. Style: ${event.style || "not specified"}. Additional preferences: ${safeNotes || "none"}.
@@ -40,8 +52,25 @@ Return a high-side estimate, not an optimistic low estimate. Budget line high es
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   let result;
   try {
+    const request = (async () => {
+      let lastError: unknown;
+      for (let index = 0; index < PLAN_ATTEMPTS.length; index += 1) {
+        try {
+          return await generateWithModel(ai, PLAN_ATTEMPTS[index], prompt);
+        } catch (error) {
+          lastError = error;
+          // Retry once on the primary, then use Google's lighter supported model.
+          if (!isTransientModelError(error)) throw error;
+          if (index === 0) await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+      }
+      if (isTransientModelError(lastError)) {
+        throw new Error("Gemini is temporarily busy. Please try creating your plan again in a moment.");
+      }
+      throw lastError;
+    })();
     result = await Promise.race([
-      model.generateContent(prompt),
+      request,
       new Promise<never>((_, reject) => {
         timeoutId = setTimeout(() => reject(new Error("The AI planner took too long to respond. Please try again.")), 45_000);
       }),
