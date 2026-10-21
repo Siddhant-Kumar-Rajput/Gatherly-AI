@@ -12,7 +12,7 @@ type Interaction = {
 };
 
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
-const MODEL = "gemini-2.5-flash";
+const MODEL = "gemini-3.8-flash";
 
 export const groundedPlacesConfigured = Boolean(API_KEY);
 
