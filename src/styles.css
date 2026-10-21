@@ -83,3 +83,86 @@
 @media(max-width:560px){.landing-art{height:265px;border-radius:20px;box-shadow:6px 6px 0 #1e293b}.scene-sticker{padding:7px 8px;font-size:7px}.sticker-top{left:4%;top:11%}.sticker-bottom{right:3%;top:29%}.art-card{right:4%;bottom:5%;padding:8px 10px}.party-scene{width:115%;max-width:none;height:115%;top:-5%}.scene-sparkles{inset:8% 5%}}
 @media(prefers-reduced-motion:reduce){.party-scene,.scene-plinth,.scene-balloon,.scene-confetti,.scene-sparkles i,.scene-sticker,.scene-glow{animation:none!important;transition:none!important}.landing-google:hover,.landing-signup:hover{transform:none}}
 
+
+/* Gatherly playful-geometric design system for the signed-in planner and shared chrome. */
+.app-shell{--gatherly-ink:#1e293b;--gatherly-muted:#64748b;--gatherly-paper:#fffdf5;--gatherly-line:#e2e8f0;--gatherly-violet:#7851c7;--gatherly-violet-dark:#55369b;min-height:100vh;background:var(--gatherly-paper);color:var(--gatherly-ink);font-family:"Plus Jakarta Sans","Instrument Sans",sans-serif}
+.app-shell button,.app-shell input,.app-shell select,.app-shell textarea{font-family:"Plus Jakarta Sans","Instrument Sans",sans-serif}
+.app-shell .sidebar{width:248px;padding:25px 18px 17px 20px;background:#fffdf5;border-right:2px solid var(--gatherly-ink);box-shadow:4px 0 0 #7851c71a}
+.app-shell .brand{font-family:"Outfit",sans-serif;font-size:20px;font-weight:700;letter-spacing:-.6px;color:var(--gatherly-ink)}
+.app-shell .brand .brand-mark{width:34px;height:34px;border-radius:12px;background:#f0eaff;color:var(--gatherly-violet)}
+.app-shell .workspace-label,.app-shell .sidebar-label-row{font-family:"Plus Jakarta Sans",sans-serif;color:#64748b;font-size:10px;letter-spacing:1.1px;text-transform:uppercase;font-weight:800}
+.app-shell .nav-list{gap:6px}
+.app-shell .nav-item,.app-shell .event-nav{border:1.5px solid transparent;border-radius:12px;color:#475569;font-weight:650;transition:background .16s,border-color .16s,transform .16s}
+.app-shell .nav-item:hover,.app-shell .event-nav:hover{background:#f3edff;border-color:#ded1fa;transform:translateX(2px)}
+.app-shell .nav-item.selected{background:#f0eaff;border:1.5px solid #d8c8f7;color:#4e338c;box-shadow:2px 2px 0 #7851c733}
+.app-shell .nav-item.selected svg,.app-shell .nav-item svg{color:#7851c7}
+.app-shell .event-nav.active{background:#fff0f7;border-color:#f8cde2;color:#7e315c}
+.app-shell .event-nav.active .event-dot{box-shadow:0 0 0 4px #f472b626}
+.app-shell .sidebar-bottom>.nav-item{margin-bottom:12px}
+.app-shell .user-block{border-top:1.5px solid #e2e8f0;padding-top:15px}
+.app-shell .avatar,.app-shell .user-block img{border:2px solid var(--gatherly-ink);background:#f0eaff;color:#55369b}
+.app-shell .main-content{margin-left:248px;background:var(--gatherly-paper)}
+.app-shell .content-wrap{max-width:1510px;padding:30px clamp(25px,4.4vw,62px) 66px}
+.app-shell .topline{height:auto;min-height:43px;padding:0 0 17px;border-bottom:1.5px solid #e2e8f0;color:#64748b;font-family:"Plus Jakarta Sans",sans-serif;font-size:12px;font-weight:650;letter-spacing:.1px}
+.app-shell .topline>span:first-child{display:inline-flex;align-items:center;gap:9px}
+.app-shell .top-avatar{width:38px;height:38px;cursor:pointer}
+.app-shell .greeting-row h1,.app-shell .event-title-row h1{font-family:"Outfit",sans-serif;font-size:clamp(2.1rem,3.3vw,3.3rem);font-weight:700;line-height:1.02;letter-spacing:-.055em;color:#1e293b}
+.app-shell .greeting-row h1 em{font-family:"Outfit",sans-serif;font-weight:700;font-style:normal;color:#7851c7}
+.app-shell .subtitle,.app-shell .event-byline{font-family:"Plus Jakarta Sans",sans-serif;color:#64748b}
+.app-shell .section-head h2,.app-shell .panel-title h2,.app-shell .side-heading h2{font-family:"Outfit",sans-serif;font-size:19px;font-weight:700;color:#1e293b;letter-spacing:-.35px}
+.app-shell .section-head p,.app-shell .panel-title p{color:#64748b;font-family:"Plus Jakarta Sans",sans-serif;font-size:12px}
+.app-shell .primary-button,.app-shell .outline-button{min-height:42px;height:auto;padding:10px 16px;border:2px solid #1e293b;border-radius:13px;background:#7851c7;color:white;box-shadow:3px 3px 0 #1e293b;font-family:"Plus Jakarta Sans",sans-serif;font-weight:750;transition:transform .16s,box-shadow .16s,background .16s}
+.app-shell .primary-button:hover{background:#6943b1;transform:translate(-1px,-1px);box-shadow:5px 5px 0 #1e293b}
+.app-shell .outline-button{background:#fffdf5;color:#1e293b}
+.app-shell .outline-button:hover{background:#f3edff;transform:translate(-1px,-1px);box-shadow:5px 5px 0 #1e293b}
+.app-shell .text-button,.app-shell .panel-link{font-family:"Plus Jakarta Sans",sans-serif;color:#6943b1;font-weight:750}
+.app-shell .event-grid{gap:16px}
+.app-shell .event-card{border:2px solid #1e293b;border-radius:18px;background:white;padding:17px;box-shadow:4px 4px 0 #1e293b;transition:transform .16s,box-shadow .16s}
+.app-shell .event-card:hover{border-color:#1e293b;transform:translate(-2px,-2px);box-shadow:6px 6px 0 #7851c7}
+.app-shell .event-card-title{font-family:"Outfit",sans-serif;font-size:18px;font-weight:700;color:#1e293b}
+.app-shell .kind-pill{border:1px solid #d8c8f7;background:#f0eaff;color:#55369b;font-weight:750}
+.app-shell .days-pill{color:#64748b;background:#f1f5f9}
+.app-shell .event-progress>span{background:#f1f5f9}.app-shell .event-progress>span>i{background:#34d399}
+.app-shell .overview-layout{gap:27px}
+.app-shell .glance-card{border:2px solid #1e293b;border-radius:18px;background:#f3edff;box-shadow:4px 4px 0 #1e293b}
+.app-shell .glance-number{font-family:"Outfit",sans-serif;font-size:40px;color:#55369b}
+.app-shell .glance-icon,.app-shell .nudge-icon{border:1.5px solid #1e293b;background:#fffdf5;color:#7851c7;box-shadow:2px 2px 0 #1e293b}
+.app-shell .nudge-card{border:2px solid #1e293b;border-radius:16px;background:#fff;border-bottom-width:2px;box-shadow:3px 3px 0 #1e293b}
+.app-shell .nudge-card h3{font-family:"Outfit",sans-serif;font-size:16px;color:#1e293b}
+.app-shell .nudge-card p,.app-shell .privacy-note p{color:#64748b;line-height:1.65}
+.app-shell .task-preview{border-top:1px solid #e2e8f0}.app-shell .task-row{min-height:61px;border-bottom-color:#e2e8f0;border-radius:8px;padding-inline:8px}.app-shell .task-row:hover{background:#f3edff}
+.app-shell .task-check{border:1.5px solid #8b5cf6;border-radius:6px;background:white}
+.app-shell .task-main strong{font-family:"Plus Jakarta Sans",sans-serif;color:#1e293b}.app-shell .task-date{color:#64748b}
+.app-shell .event-title-row .event-context,.app-shell .event-context{color:#6943b1;font-family:"Plus Jakarta Sans",sans-serif;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
+.app-shell .event-byline{gap:9px}.app-shell .event-byline>span{border:1px solid #e2e8f0;border-radius:999px;background:#fff;padding:7px 10px;color:#475569}
+.app-shell .workspace-tabs{height:48px;border-bottom:1.5px solid #e2e8f0}
+.app-shell .workspace-tabs button{font-family:"Plus Jakarta Sans",sans-serif;font-weight:650;color:#64748b}
+.app-shell .workspace-tabs button.active{color:#55369b;border-bottom:3px solid #7851c7}
+.app-shell .panel{border:2px solid #1e293b;border-radius:18px;background:white;box-shadow:4px 4px 0 #1e293b;padding:18px}
+.app-shell .panel-title h2{font-size:18px}.app-shell .budget-panel,.app-shell .vendor-panel{background:#fff}
+.app-shell .budget-bar,.app-shell .progress-track{background:#f1f5f9}.app-shell .budget-bar i,.app-shell .progress-track i{background:#8b5cf6}
+.app-shell .grounded-place-card,.app-shell .vendor-row-wrap,.app-shell .check-row,.app-shell .guest-row{border-color:#e2e8f0;border-radius:12px}
+.app-shell .grounded-place-card{border:1.5px solid #e2e8f0;box-shadow:2px 2px 0 #1e293b12}
+.app-shell .grounded-place-placeholder{background:#e1faef;color:#16855c}
+.app-shell .grounded-place-copy>a{color:#6943b1;font-weight:750}
+.app-shell .search-button,.app-shell .status-button{border:1.5px solid #1e293b;border-radius:10px;background:#f0eaff;color:#55369b;font-family:"Plus Jakarta Sans",sans-serif;font-weight:750}
+.app-shell .status-button.confirmed{background:#e1faef;color:#146c4b}
+.app-shell .vendor-intro{border:1.5px solid #e2e8f0;border-radius:14px;background:#fffdf5;padding:12px}
+.app-shell input,.app-shell select,.app-shell textarea{border:1.5px solid #cbd5e1;border-radius:11px;background:white;color:#1e293b}
+.app-shell input:focus-visible,.app-shell select:focus-visible,.app-shell textarea:focus-visible{outline:3px solid #7851c766;outline-offset:2px;border-color:#7851c7}
+.app-shell .ai-summary{border:2px solid #1e293b;border-radius:16px;background:#f3edff;box-shadow:3px 3px 0 #1e293b}
+.app-shell .dialog{border:2px solid #1e293b;border-radius:22px;background:#fffdf5;box-shadow:8px 8px 0 #1e293b}
+.app-shell .dialog-head h2{font-family:"Outfit",sans-serif;color:#1e293b}
+.app-shell .empty-state,.app-shell .vendor-empty{border:1.5px dashed #c4b5fd;border-radius:16px;background:#faf7ff;color:#64748b}
+.app-shell .mobile-header{border-bottom:2px solid #1e293b;background:#fffdf5;color:#1e293b;font-family:"Outfit",sans-serif}
+.app-shell .mobile-header>span{font-family:"Outfit",sans-serif;font-weight:750}
+.app-shell .landing-footer{max-width:1510px;margin:22px auto 0;padding:28px clamp(25px,4.4vw,62px) 25px;border-top:1.5px solid #e2e8f0;background:#fffdf5;color:#1e293b}
+.app-shell .landing-footer .landing-brand{font-family:"Outfit",sans-serif;color:#1e293b}
+.app-shell .landing-footer .brand-mark{background:#f0eaff;color:#7851c7}
+.app-shell .landing-footer p{color:#64748b}
+.app-shell .landing-footer nav a{color:#475569;font-weight:650}
+.app-shell button:focus-visible,.app-shell a:focus-visible{outline:3px solid #7851c7;outline-offset:3px}
+@media(max-width:900px){.app-shell .sidebar{width:260px}.app-shell .main-content{margin-left:0}.app-shell .content-wrap{padding:26px 24px 54px}.app-shell .landing-footer{padding-inline:24px}}
+@media(max-width:560px){.app-shell .content-wrap{padding:21px 17px 42px}.app-shell .greeting-row{align-items:flex-start;flex-direction:column;gap:15px}.app-shell .greeting-row h1,.app-shell .event-title-row h1{font-size:2.25rem}.app-shell .section-head h2,.app-shell .panel-title h2{font-size:17px}.app-shell .event-title-row{align-items:flex-start}.app-shell .event-byline{flex-wrap:wrap}.app-shell .panel{padding:14px;border-radius:16px;box-shadow:3px 3px 0 #1e293b}.app-shell .landing-footer{margin-top:18px;padding:23px 17px 20px}.app-shell .landing-footer nav{gap:11px}.app-shell .landing-footer p{font-size:11px}}
+@media(prefers-reduced-motion:reduce){.app-shell *{scroll-behavior:auto!important;transition-duration:.01ms!important;animation-duration:.01ms!important;animation-iteration-count:1!important}}
+

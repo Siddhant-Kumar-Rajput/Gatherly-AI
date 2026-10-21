@@ -31,7 +31,7 @@ export interface EventVendor {
   reviewCount?: number;
   quote?: number;
   notes?: string;
-  source?: "sample" | "user" | "google";
+  source?: "sample" | "user" | "google" | "openstreetmap";
 }
 
 export interface EventGuest {

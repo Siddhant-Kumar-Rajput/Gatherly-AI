@@ -30,7 +30,7 @@ export async function generateEventPlan(event: Pick<EventRecord, "kind" | "custo
   const ai = getAI(firebaseApp, { backend: new GoogleAIBackend() });
   const model = getGenerativeModel(ai, {
     model: "gemini-3.8-flash",
-    generationConfig: { responseMimeType: "application/json", responseSchema: planSchema, temperature: 0.6 },
+    generationConfig: { responseMimeType: "application/json", responseSchema: planSchema },
   });
   const safeNotes = extraNotes.trim().slice(0, 600).replace(/[<>]/g, "");
   const eventType = event.kind === "Custom" ? event.customKind || "custom event" : event.kind;
