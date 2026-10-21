@@ -3,6 +3,7 @@ import { ArrowDownRight, ArrowLeft, ArrowRight, CalendarDays, Check, CheckCircle
 import { categoriesFor, budgetRemaining, budgetUsed, completionPercent, daysUntil, emailInviteUrl, eventKindLabel, formatEventDate, formatINR } from "./lib/domain";
 import { firebaseConfigured } from "./lib/config";
 import type { EventKind, EventRecord, EventVendor, PlanTask } from "./types";
+import type { GroundedPlace } from "./lib/groundedPlaces";
 
 type User = { uid: string; displayName: string; email: string; photoURL?: string };
 const kinds: EventKind[] = ["Wedding", "Birthday", "Community", "Custom"];
@@ -22,6 +23,9 @@ export default function App() {
   const [notice, setNotice] = useState("");
   const [query, setQuery] = useState("");
   const [cityDraft, setCityDraft] = useState("");
+  const [placeResults, setPlaceResults] = useState<GroundedPlace[]>([]);
+  const [placePage, setPlacePage] = useState(0);
+  const [locationCoordinates, setLocationCoordinates] = useState<{ latitude: number; longitude: number } | undefined>();
   const active = events.find((event) => event.id === activeId) || events[0];
 
   const navigate = (path: string) => {
@@ -138,37 +142,37 @@ export default function App() {
     updateEvent({ guestsList: [...active.guestsList, { id: newId(), name, email: email || undefined, invited: false }] }); setDialog(null);
   };
 
-  const addPlaces = async () => {
+  const addPlaces = async (nextPage = false) => {
     if (!cityDraft.trim()) { setNotice("Enter a city or neighbourhood to search for local vendors."); return; }
-    if (!import.meta.env.VITE_GOOGLE_MAPS_API_KEY) {
-      const mapsUrl = new URL("https://www.google.com/maps/search/");
-      mapsUrl.searchParams.set("api", "1");
-      mapsUrl.searchParams.set("query", `${query || active.vendorCategories[0] || "event vendors"} in ${cityDraft}`);
-      window.open(mapsUrl.toString(), "_blank", "noopener,noreferrer");
-      setNotice("Opened Google Maps for this search. To save Google Places results in Gatherly, add a restricted Maps browser key to .env.local.");
-      return;
-    }
+    const category = query || active.vendorCategories[0] || "event vendors";
     setBusy("places");
     try {
-      const { searchLocalPlaces } = await import("./lib/maps");
-      const places = await searchLocalPlaces(query || active.vendorCategories[0] || "event venue", cityDraft);
-      const additions = places.map((place) => ({ id: place.id, placeId: place.id, name: place.name, category: query || active.vendorCategories[0] || "Vendor", status: "Interested" as const, address: place.address, phone: place.phone, mapsUrl: place.mapsUrl, rating: place.rating, reviewCount: place.reviewCount, source: "google" as const }));
-      updateEvent({ city: cityDraft, vendors: [...active.vendors, ...additions.filter((place) => !active.vendors.some((vendor) => vendor.placeId === place.placeId))] }); setNotice(`${places.length} Google Maps results added to your shortlist. Contact them to confirm availability.`);
+      const { searchGroundedPlaces } = await import("./lib/groundedPlaces");
+      const previous = nextPage ? placeResults : [];
+      const places = await searchGroundedPlaces({ category, location: cityDraft, coordinates: locationCoordinates, excludeNames: previous.map((place) => place.name) });
+      setPlaceResults(nextPage ? [...previous, ...places.filter((place) => !previous.some((old) => old.mapsUrl === place.mapsUrl))] : places);
+      setPlacePage(nextPage ? placePage + 1 : 1);
+      if (nextPage && !places.length) setNotice("No more distinct grounded places came back for this search.");
+      else if (!places.length) setNotice("No grounded place results were returned. Try a broader category or nearby city.");
     } catch (error) { setNotice(error instanceof Error ? error.message : "Could not load vendor results."); }
     finally { setBusy(""); }
   };
 
+  const addGroundedPlace = (place: GroundedPlace) => {
+    if (!active || active.vendors.some((vendor) => vendor.mapsUrl === place.mapsUrl)) { setNotice("This place is already in your shortlist."); return; }
+    const vendor: EventVendor = { id: place.id, placeId: place.id, name: place.name, category: query || active.vendorCategories[0] || "Vendor", status: "Interested", mapsUrl: place.mapsUrl, rating: place.rating, source: "google" };
+    updateEvent({ city: cityDraft || active.city, vendors: [...active.vendors, vendor] });
+    setNotice(`${place.name} added to your interested vendors.`);
+  };
+
   const requestLocation = () => {
-    if (!import.meta.env.VITE_GOOGLE_MAPS_API_KEY) { setNotice("Location lookup needs a restricted Google Maps key. You can type a city instead."); return; }
     if (!navigator.geolocation) { setNotice("Location access is not available in this browser. Enter a city instead."); return; }
     setBusy("location");
     navigator.geolocation.getCurrentPosition(async ({ coords }) => {
       setBusy("");
-      try {
-        const { cityForCoordinates } = await import("./lib/maps");
-        const city = await cityForCoordinates(coords.latitude, coords.longitude);
-        if (city) setCityDraft(city); else setNotice("We couldn't identify a city from this location. Type it in instead.");
-      } catch { setNotice("Could not look up your location. You can enter a city manually."); }
+      setLocationCoordinates({ latitude: coords.latitude, longitude: coords.longitude });
+      setCityDraft("Near my current location");
+      setNotice("Location ready. Choose a category and search to find nearby options.");
     }, () => { setBusy(""); setNotice("Location was not shared. You can enter a city manually."); }, { timeout: 10000, maximumAge: 300000 });
   };
 
@@ -214,7 +218,7 @@ export default function App() {
               <div className="privacy-note"><span className="privacy-dot"></span><p>Your event details are stored in your private workspace.</p></div>
             </aside>
           </section>
-        </> : active ? <EventWorkspace event={active} onUpdate={updateEvent} onToggleTask={toggleTask} onVendorStatus={setVendorStatus} onAI={() => setDialog("ai")} onAddGuest={() => setDialog("guest")} onAddPlaces={addPlaces} placesConfigured={Boolean(import.meta.env.VITE_GOOGLE_MAPS_API_KEY)} busy={busy} query={query} setQuery={setQuery} cityDraft={cityDraft || active.city} setCityDraft={setCityDraft} onLocation={requestLocation} onNotice={setNotice} /> : <div className="empty-state">No events yet. Create your first celebration to start planning.</div>}
+        </> : active ? <EventWorkspace event={active} onUpdate={updateEvent} onToggleTask={toggleTask} onVendorStatus={setVendorStatus} onAI={() => setDialog("ai")} onAddGuest={() => setDialog("guest")} onAddPlaces={addPlaces} onAddGroundedPlace={addGroundedPlace} placeResults={placeResults.slice(Math.max(0, placePage - 1) * 5, placePage * 5)} hasNextPlaces={placeResults.length === placePage * 5} placesConfigured={Boolean(import.meta.env.VITE_GEMINI_API_KEY)} busy={busy} query={query} setQuery={setQuery} cityDraft={cityDraft || active.city} setCityDraft={(value) => { setCityDraft(value); setLocationCoordinates(undefined); }} onLocation={requestLocation} onNotice={setNotice} /> : <div className="empty-state">No events yet. Create your first celebration to start planning.</div>}
       </div>
       <AppFooter onNavigate={navigate}/>
     </main>
@@ -245,7 +249,7 @@ function InfoPage({ route, onNavigate }: { route: string; onNavigate: (path: str
   const content = route === "/privacy" ? {
     title: "Privacy, in plain language",
     intro: "Gatherly AI stores the information you choose to add so you can plan your events. You stay in control of location sharing and vendor contact.",
-    sections: [["Information in your plans", "Your event title, type, date, city, guest count, budget, checklist, vendor shortlist and guest details are stored in your Firebase account. Firestore rules scope event data to the signed-in account."], ["Google services", "Google Sign-In authenticates your account. If you request an AI plan, event type, city, date, guest count, budget and optional style notes are sent to Gemini through Firebase AI Logic to generate the draft. If you search for local vendors with a Maps key configured, your query and chosen city are sent to Google Places."], ["Location and invitations", "Device location is only requested after you choose the location button and approve the browser prompt. You can type a city instead. Gatherly does not read your contacts or send invitations automatically; invitation links open your email app for you to review and send."], ["Your choices", "You can use the app without sharing device location. Avoid putting sensitive personal details in AI planning notes. For help with access or data deletion, contact the developer using the public source repository until an in-app deletion control is available."]],
+    sections: [["Information in your plans", "Your event title, type, date, city, guest count, budget, checklist, vendor shortlist and guest details are stored in your Firebase account. Firestore rules scope event data to the signed-in account."], ["Google services", "Google Sign-In authenticates your account. If you request an AI plan, event type, city, date, guest count, budget and optional style notes are sent to Gemini through Firebase AI Logic to generate the draft. If you search for local vendors, the selected category and city—or device coordinates when you choose to share location—are sent to Gemini with Grounding with Google Maps enabled. Google Maps place names and source links appear with results."], ["Location and invitations", "Device location is only requested after you choose the location button and approve the browser prompt. You can type a city instead. Gatherly does not read your contacts or send invitations automatically; invitation links open your email app for you to review and send."], ["Your choices", "You can use the app without sharing device location. Avoid putting sensitive personal details in AI planning notes. For help with access or data deletion, contact the developer using the public source repository until an in-app deletion control is available."]],
   } : route === "/about" ? {
     title: "A little more about Gatherly",
     intro: "Gatherly AI is a planning assistant for weddings, birthdays, and community events, built to make the moving parts feel more manageable.",
@@ -253,7 +257,7 @@ function InfoPage({ route, onNavigate }: { route: string; onNavigate: (path: str
   } : {
     title: "Terms of use",
     intro: "Gatherly AI helps organize plans. It does not provide vendor bookings, quotes, guarantees, or professional advice.",
-    sections: [["Planning suggestions", "AI generated ideas, schedules and budget figures are drafts. Check details, prices, availability, safety and suitability with the relevant people and vendors."], ["Vendor listings", "Listings and ratings are provided by Google Places when enabled. Confirm current information and all arrangements directly with a vendor. Saving a vendor or marking it confirmed in your workspace is not a booking or payment."], ["Your account", "Use your own Google account and keep your sign-in secure. Do not add sensitive personal information to AI notes. By using the app, you understand that its features are provided as a planning aid."]],
+    sections: [["Planning suggestions", "AI generated ideas, schedules and budget figures are drafts. Check details, prices, availability, safety and suitability with the relevant people and vendors."], ["Vendor listings", "Grounded place names and links come from Google Maps. Details such as ratings, photos, addresses, and opening hours may not be available in every search. Confirm current information and all arrangements directly with a vendor. Saving a vendor or marking it confirmed in your workspace is not a booking or payment."], ["Your account", "Use your own Google account and keep your sign-in secure. Do not add sensitive personal information to AI notes. By using the app, you understand that its features are provided as a planning aid."]],
   };
   return <main className="info-page"><nav className="landing-nav" aria-label="Site navigation"><a className="landing-brand" href="/" onClick={(event) => { event.preventDefault(); onNavigate("/"); }}><LogoMark/><span>Gatherly<span> AI</span></span></a><button className="landing-signin landing-signup" onClick={() => onNavigate("/")}>Home</button></nav><article><a className="back-link" href="/" onClick={(event) => { event.preventDefault(); onNavigate("/"); }}><ArrowLeft size={14}/> Gatherly AI</a><h1>{content.title}</h1><p className="info-intro">{content.intro}</p>{content.sections.map(([heading, body]) => <section key={heading}><h2>{heading}</h2><p>{body}</p></section>)}{route === "/about" && <a className="primary-button" href="https://github.com/Siddhant-Kumar-Rajput/Gatherly-AI" target="_blank" rel="noreferrer">View public repository <ExternalLink size={15}/></a>}</article><AppFooter onNavigate={onNavigate}/></main>;
 }
@@ -272,8 +276,8 @@ function EventCard({ event, onOpen }: { event: EventRecord; onOpen: () => void }
   </button>;
 }
 
-function EventWorkspace({ event, onUpdate, onToggleTask, onVendorStatus, onAI, onAddGuest, onAddPlaces, placesConfigured, busy, query, setQuery, cityDraft, setCityDraft, onLocation, onNotice }: {
-  event: EventRecord; onUpdate: (patch: Partial<EventRecord>) => void; onToggleTask: (id: string) => void; onVendorStatus: (id: string, status: EventVendor["status"]) => void; onAI: () => void; onAddGuest: () => void; onAddPlaces: () => void; placesConfigured: boolean; busy: string; query: string; setQuery: (q: string) => void; cityDraft: string; setCityDraft: (c: string) => void; onLocation: () => void; onNotice: (s: string) => void;
+function EventWorkspace({ event, onUpdate, onToggleTask, onVendorStatus, onAI, onAddGuest, onAddPlaces, onAddGroundedPlace, placeResults, hasNextPlaces, placesConfigured, busy, query, setQuery, cityDraft, setCityDraft, onLocation, onNotice }: {
+  event: EventRecord; onUpdate: (patch: Partial<EventRecord>) => void; onToggleTask: (id: string) => void; onVendorStatus: (id: string, status: EventVendor["status"]) => void; onAI: () => void; onAddGuest: () => void; onAddPlaces: (nextPage?: boolean) => void; onAddGroundedPlace: (place: GroundedPlace) => void; placeResults: GroundedPlace[]; hasNextPlaces: boolean; placesConfigured: boolean; busy: string; query: string; setQuery: (q: string) => void; cityDraft: string; setCityDraft: (c: string) => void; onLocation: () => void; onNotice: (s: string) => void;
 }) {
   const [tab, setTab] = useState<"overview" | "vendors" | "guests">("overview");
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -296,22 +300,31 @@ function EventWorkspace({ event, onUpdate, onToggleTask, onVendorStatus, onAI, o
         </section>
       </div><aside className="workspace-right">
         <div className="side-heading"><h2>Venue & vendor shortlist</h2><button className="text-button" onClick={() => setTab("vendors")}>See all <ArrowRight size={15}/></button></div>
-        <section className="panel vendor-panel"><div className="vendor-intro"><span className="vendor-sparkle"><Compass size={17}/></span><div><strong>Find the right people</strong><p>Shortlist local options. You confirm directly.</p></div></div><div className="location-controls"><label className="sr-only" htmlFor="vendor-city">Search area</label><input id="vendor-city" value={cityDraft} onChange={(e)=>setCityDraft(e.target.value)} placeholder="City or neighbourhood"/><button className="icon-button" aria-label="Use my location" onClick={onLocation}><MapPin size={16}/></button></div><div className="search-row"><label className="sr-only" htmlFor="vendor-category">Vendor category</label><select id="vendor-category" value={query || categories[0]} onChange={(e)=>setQuery(e.target.value)}>{categories.map((category)=><option key={category}>{category}</option>)}</select><button className="search-button" disabled={busy === "places"} onClick={onAddPlaces}>{busy === "places" ? <LoaderCircle className="spin" size={16}/> : <Search size={16}/>}<span>Find</span></button></div>{!placesConfigured && <p className="maps-key-note">Google Maps will open now. To save listings in this shortlist, add a restricted Maps key as <code>VITE_GOOGLE_MAPS_API_KEY</code> to <code>.env.local</code>. Enable Maps JavaScript API and Places API (New); Google requires billing for Places requests.</p>}
+        <section className="panel vendor-panel"><div className="vendor-intro"><span className="vendor-sparkle"><Compass size={17}/></span><div><strong>Find the right people</strong><p>Five grounded options at a time. You confirm directly.</p></div></div><div className="location-controls"><label className="sr-only" htmlFor="vendor-city">Search area</label><input id="vendor-city" value={cityDraft} onChange={(e)=>setCityDraft(e.target.value)} placeholder="City or neighbourhood"/><button className="icon-button" aria-label="Use my location" onClick={onLocation}><MapPin size={16}/></button></div><div className="search-row"><label className="sr-only" htmlFor="vendor-category">Vendor category</label><input id="vendor-category" list="vendor-category-options" value={query || categories[0]} onChange={(e)=>setQuery(e.target.value)} placeholder="Cafe, cake shop, banquet…"/><datalist id="vendor-category-options">{categories.map((category)=><option key={category} value={category}/>)}</datalist><button className="search-button" disabled={busy === "places" || !placesConfigured} onClick={()=>onAddPlaces(false)}>{busy === "places" ? <LoaderCircle className="spin" size={16}/> : <Search size={16}/>}<span>Find</span></button></div>{!placesConfigured && <p className="maps-key-note">Add a Gemini AI Studio key as <code>VITE_GEMINI_API_KEY</code> to enable Google Maps-grounded search. No Maps Platform billing key is needed.</p>}
+          {placeResults.length > 0 && <><p className="grounding-attribution">Places grounded by <span translate="no">Google Maps</span> · Showing {placeResults.length} options</p><div className="grounded-results">{placeResults.map((place)=><GroundedPlaceCard key={place.id} place={place} saved={event.vendors.some((vendor)=>vendor.mapsUrl===place.mapsUrl)} onInterested={()=>onAddGroundedPlace(place)}/>)}</div>{hasNextPlaces && <button className="panel-link" disabled={busy === "places"} onClick={()=>onAddPlaces(true)}>{busy === "places" ? "Finding more…" : "Next five places"}<ArrowRight size={15}/></button>}</>}
           <div className="vendor-shortlist">{event.vendors.slice(0, 3).map((vendor) => <VendorRow key={vendor.id} vendor={vendor} expanded={expanded===vendor.id} onExpand={()=>setExpanded(expanded===vendor.id?null:vendor.id)} onStatus={onVendorStatus}/>)}</div>
-          {!event.vendors.length && <div className="vendor-empty"><div className="empty-illustration"><MapPin size={20}/></div><strong>Your shortlist starts here</strong><p>Search Google Maps for local {eventKindLabel(event).toLowerCase()} vendors. Compare and contact them yourself.</p></div>}
+          {!event.vendors.length && <div className="vendor-empty"><div className="empty-illustration"><MapPin size={20}/></div><strong>Your shortlist starts here</strong><p>Search grounded local listings for {eventKindLabel(event).toLowerCase()} vendors. Compare and contact them yourself.</p></div>}
           <button className="panel-link" onClick={()=>setTab("vendors")}>{event.vendors.length ? "Open shortlist" : "Browse vendor categories"}<ArrowRight size={15}/></button>
         </section>
         <section className="invite-card"><div className="invite-icon"><Send size={17}/></div><h3>Good things are better together.</h3><p>Put your people on the guest list. Invitations open in your own email app.</p><button className="outline-button" onClick={onAddGuest}><Plus size={15}/>Add a guest</button></section>
         <div className="event-note"><Clock3 size={15}/><span>{daysUntil(event.date) < 0 ? "This date has passed" : daysUntil(event.date) === 0 ? "The celebration is today" : `${daysUntil(event.date)} days until the celebration`}</span></div>
       </aside></div>
     </>}
-    {tab === "vendors" && <section className="panel full-panel"><div className="panel-title"><div><h2>Vendor shortlist</h2><p>Interested vendors are saved here. Confirm after you contact and agree with them.</p></div></div><div className="vendor-category-chips">{categories.map((c)=><button key={c} className={`category-chip ${query===c?"selected":""}`} onClick={()=>setQuery(c)}>{c}</button>)}</div><div className="vendor-search-large"><input aria-label="City" value={cityDraft} onChange={(e)=>setCityDraft(e.target.value)} placeholder="City or neighbourhood"/><select aria-label="Vendor type" value={query || categories[0]} onChange={(e)=>setQuery(e.target.value)}>{categories.map((c)=><option key={c}>{c}</option>)}</select><button className="primary-button" disabled={busy === "places"} onClick={onAddPlaces}>{busy === "places"?<LoaderCircle className="spin" size={16}/>:<Search size={16}/>}Find local vendors</button></div>{!placesConfigured && <p className="maps-key-note">Live listings in the app need a restricted Google Maps browser key in <code>.env.local</code> under <code>VITE_GOOGLE_MAPS_API_KEY</code>. Maps JavaScript API and Places API (New) must be enabled, and Places requires billing. The Find button opens the same query in Google Maps while the key is missing.</p>}{event.vendors.length ? <div className="vendor-list">{event.vendors.map(vendor=><VendorRow key={vendor.id} vendor={vendor} expanded={expanded===vendor.id} onExpand={()=>setExpanded(expanded===vendor.id?null:vendor.id)} onStatus={onVendorStatus}/>)}</div> : <div className="empty-state wide-empty"><Compass size={22}/><strong>Your shortlist is ready for its first name.</strong><p>Choose a category and search to find local options.</p></div>}</section>}
+    {tab === "vendors" && <section className="panel full-panel"><div className="panel-title"><div><h2>Vendor shortlist</h2><p>Interested vendors are saved here. Confirm after you contact and agree with them.</p></div></div><div className="vendor-category-chips">{categories.map((c)=><button key={c} className={`category-chip ${query===c?"selected":""}`} onClick={()=>setQuery(c)}>{c}</button>)}</div><div className="vendor-search-large"><input aria-label="City" value={cityDraft} onChange={(e)=>setCityDraft(e.target.value)} placeholder="City or neighbourhood"/><input aria-label="Vendor type" list="vendor-category-options" value={query || categories[0]} onChange={(e)=>setQuery(e.target.value)} placeholder="Cafe, cake shop, banquet…"/><datalist id="vendor-category-options">{categories.map((c)=><option key={c} value={c}/>)}</datalist><button className="primary-button" disabled={busy === "places" || !placesConfigured} onClick={()=>onAddPlaces(false)}>{busy === "places"?<LoaderCircle className="spin" size={16}/>:<Search size={16}/>}Find local vendors</button></div>{!placesConfigured && <p className="maps-key-note">Set <code>VITE_GEMINI_API_KEY</code> to enable Google Maps-grounded discovery. A Maps Platform billing key is not required.</p>}{placeResults.length > 0 && <><p className="grounding-attribution">Places grounded by <span translate="no">Google Maps</span> · Showing {placeResults.length} options</p><div className="grounded-results">{placeResults.map((place)=><GroundedPlaceCard key={place.id} place={place} saved={event.vendors.some((vendor)=>vendor.mapsUrl===place.mapsUrl)} onInterested={()=>onAddGroundedPlace(place)}/>)}</div>{hasNextPlaces && <button className="panel-link" disabled={busy === "places"} onClick={()=>onAddPlaces(true)}>{busy === "places" ? "Finding more…" : "Next five places"}<ArrowRight size={15}/></button>}</>}{event.vendors.length ? <div className="vendor-list">{event.vendors.map(vendor=><VendorRow key={vendor.id} vendor={vendor} expanded={expanded===vendor.id} onExpand={()=>setExpanded(expanded===vendor.id?null:vendor.id)} onStatus={onVendorStatus}/>)}</div> : <div className="empty-state wide-empty"><Compass size={22}/><strong>Your shortlist is ready for its first name.</strong><p>Choose a category and search to find local options.</p></div>}</section>}
     {tab === "guests" && <section className="panel full-panel"><div className="panel-title"><div><h2>The people who make it special</h2><p>{event.guestsList.length} guests · invitations are opened and sent by you</p></div><button className="primary-button" onClick={onAddGuest}><Plus size={16}/>Add guests</button></div>{event.guestsList.length ? <div className="guest-list">{event.guestsList.map(guest=><div className="guest-row" key={guest.id}><span className="guest-avatar">{guest.name[0]}</span><span className="guest-name"><strong>{guest.name}</strong><small>{guest.email || "No email added"}</small></span><span className={`guest-status ${guest.invited?"sent":"pending"}`}>{guest.invited?"Invitation prepared":"Not invited"}</span><a className="outline-button compact" href={emailInviteUrl(event, guest.name, guest.email)} onClick={()=>onUpdate({ guestsList:event.guestsList.map(item=>item.id===guest.id?{...item,invited:true}:item)})}><Send size={14}/>Prepare invite</a></div>)}</div> : <div className="empty-state wide-empty"><Users size={22}/><strong>Every good gathering starts with its people.</strong><p>Add guests, then open a personal invitation in your email app.</p><button className="outline-button" onClick={onAddGuest}><Plus size={15}/>Add first guest</button></div>}</section>}
   </>;
 }
 
 function VendorRow({ vendor, expanded, onExpand, onStatus }: { vendor: EventVendor; expanded: boolean; onExpand: () => void; onStatus: (id: string, status: EventVendor["status"]) => void }) {
   return <div className="vendor-row-wrap"><div className="vendor-row"><button className="vendor-row-main" onClick={onExpand} aria-expanded={expanded}><span className="vendor-initial">{vendor.name[0]}</span><span className="vendor-name"><strong>{vendor.name}</strong><small>{vendor.category}{vendor.rating ? ` · Rating ${vendor.rating}${vendor.reviewCount ? ` (${vendor.reviewCount})` : ""}` : ""}</small></span></button><button className={`status-button ${vendor.status.toLowerCase()}`} onClick={()=>onStatus(vendor.id,vendor.status === "Confirmed" ? "Interested" : "Confirmed")} aria-label={`${vendor.status === "Confirmed" ? "Mark as interested" : "Confirm"} ${vendor.name}`}>{vendor.status === "Confirmed" ? <><Check size={13}/>Confirmed</> : <><Heart size={13}/>Interested</>}</button></div>{expanded && <div className="vendor-details">{vendor.address && <p><MapPin size={14}/>{vendor.address}</p>}{vendor.phone && <a href={`tel:${vendor.phone}`}><span>Call vendor</span>{vendor.phone}</a>}{vendor.mapsUrl && <a href={vendor.mapsUrl} target="_blank" rel="noreferrer"><span>Open in Google Maps</span><ExternalLink size={13}/></a>}{vendor.source==="sample"&&<small>Illustrative sample vendor. Not a real booking.</small>}{!vendor.phone&&!vendor.mapsUrl&&!vendor.address&&<p>Contact information is not available here.</p>}</div>}</div>;
+}
+
+function GroundedPlaceCard({ place, saved, onInterested }: { place: GroundedPlace; saved: boolean; onInterested: () => void }) {
+  return <article className="grounded-place-card">
+    {place.photoUrl ? <img className="grounded-place-photo" src={place.photoUrl} alt={`${place.name}`} loading="lazy"/> : <span className="grounded-place-placeholder" aria-hidden="true"><MapPin size={20}/></span>}
+    <div className="grounded-place-copy"><strong>{place.name}</strong>{place.rating ? <span className="place-rating" aria-label={`Rating ${place.rating} out of 5`}>★ {place.rating.toFixed(1)}</span> : null}{place.description && <small>{place.description}</small>}<a href={place.mapsUrl} target="_blank" rel="noreferrer">Open in Google Maps <ExternalLink size={13}/></a></div>
+    <button className={`status-button ${saved ? "confirmed" : ""}`} onClick={onInterested} disabled={saved}>{saved ? <><Check size={13}/>Saved</> : <><Heart size={13}/>Interested</>}</button>
+  </article>;
 }
 
 function TaskRow({ task, onToggle }: { task: PlanTask; onToggle: () => void }) {
