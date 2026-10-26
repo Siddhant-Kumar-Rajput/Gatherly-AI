@@ -93,6 +93,17 @@ describe("searchGroundedPlaces", () => {
     expect(body.toolConfig.retrievalConfig.latLng).toEqual({ latitude: 12.9, longitude: 77.6 });
   });
 
+  it("offers a direct Google Maps search when both map data and Gemini quota are unavailable", async () => {
+    const fetchMock = mockCityAndPlaces([]);
+    vi.stubGlobal("fetch", fetchMock);
+    const { searchGroundedPlaces } = await import("./groundedPlaces");
+    const places = await searchGroundedPlaces({ category: "Cake shops", location: "Test City" });
+
+    expect(places).toHaveLength(1);
+    expect(places[0]).toMatchObject({ source: "maps-search", name: "Search Cake shops in Test City" });
+    expect(places[0].mapsUrl).toContain(encodeURIComponent("Cake shops, Test City"));
+  });
+
   it("uses local OpenStreetMap results even when a Gemini key is configured", async () => {
     vi.stubEnv("VITE_GEMINI_API_KEY", "test-only-key");
     const fetchMock = mockCityAndPlaces();

@@ -5,7 +5,7 @@ export interface GroundedPlace {
   description?: string;
   rating?: number;
   photoUrl?: string;
-  source: "google" | "openstreetmap";
+  source: "google" | "openstreetmap" | "maps-search";
 }
 
 type PhotonFeature = {
@@ -247,5 +247,18 @@ export async function searchGroundedPlaces({
 
   // OSM business coverage varies by city. When it has no listings, ask Gemini
   // to ground the query in Google Maps at the geocoded city center.
-  return searchGoogleMapsGroundedPlaces(category.trim(), resolvedLocation, center.latitude, center.longitude, excludeNames);
+  const grounded = await searchGoogleMapsGroundedPlaces(category.trim(), resolvedLocation, center.latitude, center.longitude, excludeNames);
+  if (grounded.length) return grounded;
+
+  // Keep the lookup useful even when Gemini quota is exhausted: Google Maps
+  // search itself remains available as a regular link and does not invent data.
+  const searchName = `Search ${category.trim()} in ${resolvedLocation}`;
+  if (excludeNames.some((name) => name.trim().toLocaleLowerCase() === searchName.toLocaleLowerCase())) return [];
+  return [{
+    id: `maps-search:${cacheKey}`,
+    name: searchName,
+    mapsUrl: mapUrl(category.trim(), resolvedLocation),
+    description: "Open Google Maps for live local listings. Vendor details are not available inside Gatherly right now.",
+    source: "maps-search",
+  }];
 }

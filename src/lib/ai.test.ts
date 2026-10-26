@@ -77,6 +77,19 @@ describe("generateEventPlan", () => {
     expect(String(fetchMock.mock.calls[1][0])).toContain("gemini-3.8-flash");
   });
 
+  it("builds a clearly labeled editable starter when Gemini quota is exhausted", async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: "Quota exceeded" } }), { status: 429 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: "Quota exceeded" } }), { status: 429 }));
+    const { generateEventPlan } = await import("./ai");
+    const plan = await generateEventPlan({ kind: "Birthday", date: "2027-06-12", city: "Bengaluru", guests: 20, budget: 60000, style: "relaxed" });
+
+    expect(plan.source).toBe("template");
+    expect(plan.summary).toContain("free quota");
+    expect(plan.budgetLines.reduce((sum, line) => sum + line.highEstimate, 0) + plan.contingency).toBeLessThanOrEqual(60000);
+    expect(plan.vendorCategories).toContain("Cake shops");
+  });
+
   it("surfaces empty model responses as a useful error", async () => {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ candidates: [{ content: { parts: [] } }] }), { status: 200 }));
     const { generateEventPlan } = await import("./ai");

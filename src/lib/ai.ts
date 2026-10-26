@@ -1,4 +1,4 @@
-import { normalizePlan } from "./domain";
+import { categoriesFor, normalizePlan } from "./domain";
 import type { EventPlan, EventRecord } from "../types";
 
 const PLAN_SCHEMA = {
@@ -39,6 +39,38 @@ type GeminiResponse = {
 };
 
 type GeminiRequestError = Error & { status?: number; retryable?: boolean };
+
+function makeQuickPlan(event: Pick<EventRecord, "kind" | "customKind" | "date" | "city" | "guests" | "budget" | "style">): EventPlan {
+  const kind = event.kind === "Custom" ? event.customKind || "celebration" : event.kind.toLocaleLowerCase();
+  const categories = event.kind === "Custom" ? categoriesFor("Custom", event.customKind) : categoriesFor(event.kind);
+  const reserve = Math.round(event.budget * 0.1);
+  const spending = Math.max(0, event.budget - reserve);
+  const buckets = event.kind === "Wedding"
+    ? [["Venue", 0.3], ["Food & catering", 0.32], ["Decor", 0.15], ["Photography", 0.12], ["Contingency items", 0.11]] as const
+    : [["Venue", 0.2], ["Food & catering", 0.38], ["Decor & activities", 0.16], ["Photography", 0.1], ["Other essentials", 0.16]] as const;
+  const budgetLines = buckets.map(([category, share]) => ({
+    category,
+    highEstimate: Math.round(spending * share),
+    rationale: `Starter allocation for ${event.guests} guests; replace with local quotes.`,
+  }));
+  const offsets = [30, 21, 14, 7, 1];
+  const taskTitles = ["Set the event priorities", "Shortlist local vendors", "Confirm the venue and menu", "Recheck guest count and arrangements", "Confirm final details with vendors"];
+  const tasks = offsets.map((days, index) => {
+    const date = new Date(`${event.date}T12:00:00`);
+    date.setDate(date.getDate() - days);
+    return { title: taskTitles[index], dueDate: date < new Date() ? event.date : date.toISOString().slice(0, 10), category: index < 2 ? "Planning" : "Vendors" };
+  });
+  return {
+    source: "template",
+    summary: "Gemini has reached its current free quota. This editable starter uses your event details; replace estimates with vendor quotes.",
+    highSideTotal: budgetLines.reduce((sum, line) => sum + line.highEstimate, 0),
+    contingency: reserve,
+    budgetLines,
+    tasks,
+    vendorCategories: categories.slice(0, 3),
+    ideas: [`Choose a ${event.style || "simple"} look that fits ${event.city}.`, `Keep the food plan practical for ${event.guests} guests.`, `Set one personal moment that makes the ${kind} feel special.`],
+  };
+}
 
 function isTimeoutError(error: unknown): boolean {
   const candidate = error as { name?: string; message?: string };
@@ -113,8 +145,7 @@ export async function generateEventPlan(event: Pick<EventRecord, "kind" | "custo
     // on the standard Flash model rather than cycling through duplicate calls.
   }
   if (!responseText) {
-    if (isTimeoutError(lastError)) throw new Error("Gemini is taking longer than expected. Please try again; if this keeps happening, check that the AI Studio key is active and the Gemini API is enabled.");
-    if (isRetryable(lastError)) throw new Error("Gemini is temporarily busy or rate-limited. Please retry shortly.");
+    if (isRetryable(lastError)) return normalizePlan(makeQuickPlan(event), event.budget, event.date);
     throw lastError;
   }
 
@@ -127,5 +158,5 @@ export async function generateEventPlan(event: Pick<EventRecord, "kind" | "custo
   if (!Array.isArray(parsed.budgetLines) || !Array.isArray(parsed.tasks) || !Array.isArray(parsed.ideas)) {
     throw new Error("The AI plan was missing required sections. Please try again.");
   }
-  return normalizePlan(parsed, event.budget, event.date);
+  return normalizePlan({ ...parsed, source: "gemini" }, event.budget, event.date);
 }

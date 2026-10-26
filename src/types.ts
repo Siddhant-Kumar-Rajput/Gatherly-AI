@@ -42,6 +42,7 @@ export interface EventGuest {
 }
 
 export interface EventPlan {
+  source?: "gemini" | "template";
   summary: string;
   highSideTotal: number;
   contingency: number;
@@ -67,6 +68,7 @@ export interface EventRecord {
   vendors: EventVendor[];
   guestsList: EventGuest[];
   aiSummary?: string;
+  aiSource?: "gemini" | "template";
   aiIdeas?: string[];
   isSample?: boolean;
 }
