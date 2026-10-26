@@ -5,6 +5,7 @@ import { collection, doc, getDoc, onSnapshot, serverTimestamp, setDoc, type Unsu
 import { getFirestore } from "firebase/firestore";
 import type { EventRecord, UserProfile } from "../types";
 import { firebaseConfigured } from "./config";
+import { stripUndefined } from "./firestoreData";
 
 const env = import.meta.env;
 const firebaseConfig = {
@@ -44,11 +45,11 @@ export async function signInWithGoogle(): Promise<User> {
   };
   const profileRef = doc(db!, "users", result.user.uid);
   const existing = await getDoc(profileRef);
-  await setDoc(profileRef, {
+  await setDoc(profileRef, stripUndefined({
     ...profile,
     createdAt: existing.exists() ? existing.data().createdAt : serverTimestamp(),
     updatedAt: serverTimestamp(),
-  }, { merge: true });
+  }), { merge: true });
   return result.user;
 }
 
@@ -65,8 +66,8 @@ export function watchEvents(uid: string, callback: (events: EventRecord[]) => vo
 
 export async function saveEvent(uid: string, event: EventRecord): Promise<void> {
   if (!db) throw new Error("Cloud Firestore is not configured.");
-  await setDoc(doc(db, "users", uid, "events", event.id), {
+  await setDoc(doc(db, "users", uid, "events", event.id), stripUndefined({
     ...event,
     updatedAt: serverTimestamp(),
-  });
+  }));
 }

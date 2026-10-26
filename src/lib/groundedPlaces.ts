@@ -67,6 +67,16 @@ function distanceKm(a: [number, number], b: [number, number]): number {
   return 6371 * 2 * Math.asin(Math.sqrt(h));
 }
 
+function normalizeLocality(value: string): string {
+  return value.toLocaleLowerCase().split(",")[0].replace(/\b(district|city)\b/g, "").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+function sameLocality(actual: string, expected: string): boolean {
+  const actualName = normalizeLocality(actual);
+  const expectedName = normalizeLocality(expected);
+  return actualName === expectedName || actualName.startsWith(`${expectedName} `);
+}
+
 function getUniquePlaces(places: GroundedPlace[], excludeNames: string[]): GroundedPlace[] {
   const excluded = new Set(excludeNames.map((name) => name.trim().toLocaleLowerCase()));
   const seen = new Set<string>();
@@ -81,6 +91,7 @@ function getUniquePlaces(places: GroundedPlace[], excludeNames: string[]): Groun
 async function searchPhotonPlaces(category: string, location: string, coordinates?: { latitude: number; longitude: number }): Promise<GroundedPlace[]> {
   let latitude = coordinates?.latitude;
   let longitude = coordinates?.longitude;
+  let targetCity: string | undefined;
 
   if (latitude === undefined || longitude === undefined) {
     const geocodeUrl = new URL(PHOTON_API);
@@ -88,10 +99,13 @@ async function searchPhotonPlaces(category: string, location: string, coordinate
     const geocodeResponse = await fetch(geocodeUrl, { signal: AbortSignal.timeout(10_000) });
     if (!geocodeResponse.ok) throw new Error("Could not look up that city. Check the spelling or add the state or country.");
     const geocode = await geocodeResponse.json() as { features?: PhotonFeature[] };
-    const city = geocode.features?.find((feature) => feature.geometry?.coordinates?.length === 2 && /city|town|village|municipality|suburb|neighbourhood|postcode/.test(feature.properties?.osm_value || ""))
-      || geocode.features?.find((feature) => feature.geometry?.coordinates?.length === 2);
-    if (!city?.geometry?.coordinates) throw new Error("Could not find that city. Check the spelling or include the state or country.");
-    [longitude, latitude] = city.geometry.coordinates;
+    const features = geocode.features || [];
+    const exactPlace = features.find((feature) => feature.geometry?.coordinates?.length === 2 && sameLocality(feature.properties?.name || "", location));
+    const place = exactPlace || features.find((feature) => feature.geometry?.coordinates?.length === 2 && /city|town|village|municipality|suburb|neighbourhood|postcode/.test(feature.properties?.osm_value || ""));
+    if (!place?.geometry?.coordinates) throw new Error("Could not find that city or neighbourhood. Add the state or country and try again.");
+    [longitude, latitude] = place.geometry.coordinates;
+    const placeType = place.properties?.osm_value || "";
+    targetCity = place.properties?.city || (/city|town|village|municipality/.test(placeType) ? place.properties?.name : undefined);
   }
 
   const searchUrl = new URL(PHOTON_API);
@@ -109,12 +123,13 @@ async function searchPhotonPlaces(category: string, location: string, coordinate
   const center: [number, number] = [longitude!, latitude!];
   // Photon does fuzzy text matching. Bound results to the searched area and enforce
   // strict OSM categories for the common cafe/restaurant mix-up.
-  const maxDistanceKm = coordinates ? 15 : 30;
+  const maxDistanceKm = coordinates ? 8 : targetCity ? 20 : 8;
   return (payload.features || []).flatMap((feature) => {
     const properties = feature.properties;
     const point = feature.geometry?.coordinates;
     if (!properties?.name || !properties.osm_id || !properties.osm_type || !point) return [];
     if (distanceKm(center, point) > maxDistanceKm || !matchesPlaceType(category, properties)) return [];
+    if (targetCity && properties.city && !sameLocality(properties.city, targetCity)) return [];
     const address = [properties.housenumber, properties.street, properties.district || properties.locality, properties.city, properties.state, properties.postcode].filter(Boolean).join(", ");
     const detail = [properties.osm_value?.replaceAll("_", " "), address].filter(Boolean).join(" · ");
     return [{

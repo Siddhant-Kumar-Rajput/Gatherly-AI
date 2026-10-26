@@ -13,6 +13,7 @@ function cafeFeatures() {
     geometry: { type: "Point", coordinates: [77.6 + index / 100, 12.9] },
   })),
   { type: "Feature", properties: { name: "Nearby restaurant", osm_type: "N", osm_id: 40, osm_key: "amenity", osm_value: "restaurant", city: "Test City" }, geometry: { type: "Point", coordinates: [77.61, 12.9] } },
+  { type: "Feature", properties: { name: "Cafe in adjacent city", osm_type: "N", osm_id: 42, osm_key: "amenity", osm_value: "cafe", city: "Adjacent Town" }, geometry: { type: "Point", coordinates: [77.61, 12.9] } },
   { type: "Feature", properties: { name: "Cafe in another city", osm_type: "N", osm_id: 41, osm_key: "amenity", osm_value: "cafe", city: "Elsewhere" }, geometry: { type: "Point", coordinates: [90, 23] } },
   ];
 }
@@ -59,13 +60,13 @@ describe("searchGroundedPlaces", () => {
 
     expect(places).toHaveLength(5);
     expect(places[0].source).toBe("openstreetmap");
-    expect(places.every((place) => place.name !== "Nearby restaurant" && place.name !== "Cafe in another city")).toBe(true);
+    expect(places.every((place) => !["Nearby restaurant", "Cafe in another city", "Cafe in adjacent city"].includes(place.name))).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("reports a useful message if the city cannot be found", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ features: [] }), { status: 200 })));
     const { searchGroundedPlaces } = await import("./groundedPlaces");
-    await expect(searchGroundedPlaces({ category: "cafes", location: "Unknown test place" })).rejects.toThrow("Check the spelling or include the state or country");
+    await expect(searchGroundedPlaces({ category: "cafes", location: "Unknown test place" })).rejects.toThrow("Add the state or country");
   });
 });

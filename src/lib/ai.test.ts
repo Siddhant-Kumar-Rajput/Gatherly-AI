@@ -1,101 +1,84 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-  generateContent: vi.fn(),
-  getAI: vi.fn(() => ({ name: "test-ai" })),
-  getGenerativeModel: vi.fn(),
-}));
+const planResponse = {
+  summary: "A relaxed birthday lunch.", highSideTotal: 100000, contingency: 15000,
+  budgetLines: [{ category: "Food", highEstimate: 70000, rationale: "Sample estimate." }, { category: "Cake", highEstimate: 30000, rationale: "Sample estimate." }],
+  tasks: [{ title: "Confirm venue", dueDate: "2030-01-01", category: "Venue" }],
+  vendorCategories: ["Restaurants"], ideas: ["Add a playlist."],
+};
 
-vi.mock("firebase/ai", () => ({
-  getAI: mocks.getAI,
-  getGenerativeModel: mocks.getGenerativeModel,
-  GoogleAIBackend: class GoogleAIBackend {},
-  Schema: {
-    object: vi.fn((schema) => schema),
-    string: vi.fn(() => "string"),
-    number: vi.fn(() => "number"),
-    array: vi.fn((schema) => schema),
-  },
-}));
-vi.mock("./firebase", () => ({ firebaseApp: { name: "test-app" } }));
-vi.mock("./config", () => ({ firebaseConfigured: true }));
+function successResponse(plan = planResponse) {
+  return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(plan) }] } }] }), { status: 200 });
+}
 
 describe("generateEventPlan", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
   beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.getGenerativeModel.mockReturnValue({ generateContent: mocks.generateContent });
-    mocks.generateContent.mockResolvedValue({
-      response: {
-        text: () => JSON.stringify({
-          summary: "A relaxed birthday lunch.",
-          highSideTotal: 100000,
-          contingency: 15000,
-          budgetLines: [{ category: "Food", highEstimate: 70000, rationale: "Sample estimate." }, { category: "Cake", highEstimate: 30000, rationale: "Sample estimate." }],
-          tasks: [{ title: "Confirm venue", dueDate: "2030-01-01", category: "Venue" }],
-          vendorCategories: ["Restaurants"],
-          ideas: ["Add a playlist."],
-        }),
-      },
-    });
+    vi.stubEnv("VITE_GEMINI_API_KEY", "test-key-1");
+    vi.stubEnv("VITE_GEMINI_API_KEY_2", "test-key-2");
+    vi.stubEnv("VITE_GEMINI_API_KEY_3", "test-key-3");
+    fetchMock = vi.fn().mockResolvedValue(successResponse());
+    vi.stubGlobal("fetch", fetchMock);
   });
 
-  it("requests structured Gemini output and normalizes its budget and dates", async () => {
+  it("calls the Gemini API with a protected header and structured plan schema", async () => {
     const { generateEventPlan } = await import("./ai");
     const plan = await generateEventPlan({ kind: "Birthday", date: "2027-06-12", city: "Bengaluru", guests: 20, budget: 60000, style: "relaxed" });
 
-    expect(mocks.getAI).toHaveBeenCalledTimes(1);
-    expect(mocks.getGenerativeModel).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      model: "gemini-3.8-flash",
-      generationConfig: expect.objectContaining({ responseMimeType: "application/json", responseSchema: expect.anything() }),
-    }));
-    const modelOptions = mocks.getGenerativeModel.mock.calls[0][1];
-    expect(modelOptions.generationConfig).not.toHaveProperty("temperature");
+    expect(plan.summary).toBe(planResponse.summary);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toContain("/models/gemini-3.8-flash:generateContent");
+    expect(options.headers["x-goog-api-key"]).toBe("test-key-1");
+    expect(url).not.toContain("test-key-1");
+    const body = JSON.parse(options.body);
+    expect(body.generationConfig.responseMimeType).toBe("application/json");
+    expect(body.generationConfig.responseSchema.required).toContain("budgetLines");
     expect(plan.budgetLines.reduce((sum, line) => sum + line.highEstimate, 0)).toBeLessThanOrEqual(60000);
     expect(plan.contingency).toBeLessThanOrEqual(60000 - plan.highSideTotal);
     expect(plan.tasks[0].dueDate).toBe("2027-06-12");
     expect(plan.vendorCategories).toEqual(["Restaurants"]);
   });
 
+  it("rotates to another new auth key only when the first is rejected", async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: "API key not authorized" } }), { status: 403 }))
+      .mockResolvedValueOnce(successResponse());
+    const { generateEventPlan } = await import("./ai");
+
+    await generateEventPlan({ kind: "Birthday", date: "2027-06-12", city: "Bengaluru", guests: 20, budget: 60000, style: "" });
+
+    expect(fetchMock.mock.calls.map((call) => call[1].headers["x-goog-api-key"])).toEqual(["test-key-1", "test-key-2"]);
+  });
+
+  it("retries a temporary 503 and falls back to Gemini Flash-Lite", async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: "Service unavailable" } }), { status: 503 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: "Service unavailable" } }), { status: 503 }))
+      .mockResolvedValueOnce(successResponse());
+    const { generateEventPlan } = await import("./ai");
+
+    const plan = await generateEventPlan({ kind: "Birthday", date: "2027-06-12", city: "Bengaluru", guests: 20, budget: 60000, style: "" });
+
+    expect(plan.summary).toBe(planResponse.summary);
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
+      expect.stringContaining("gemini-3.8-flash"), expect.stringContaining("gemini-3.8-flash"), expect.stringContaining("gemini-3.5-flash-lite"),
+    ]);
+  });
+
+  it("skips a stalled primary model and tries Flash-Lite immediately", async () => {
+    fetchMock.mockRejectedValueOnce(Object.assign(new Error("Timed out"), { name: "TimeoutError" })).mockResolvedValueOnce(successResponse());
+    const { generateEventPlan } = await import("./ai");
+
+    await generateEventPlan({ kind: "Birthday", date: "2027-06-12", city: "Bengaluru", guests: 20, budget: 60000, style: "" });
+
+    expect(String(fetchMock.mock.calls[1][0])).toContain("gemini-3.5-flash-lite");
+  });
+
   it("surfaces empty model responses as a useful error", async () => {
-    mocks.generateContent.mockResolvedValue({ response: { text: () => "" } });
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ candidates: [{ content: { parts: [] } }] }), { status: 200 }));
     const { generateEventPlan } = await import("./ai");
     await expect(generateEventPlan({ kind: "Birthday", date: "2027-06-12", city: "Bengaluru", guests: 20, budget: 60000, style: "" })).rejects.toThrow("returned an empty response");
-  });
-
-  it("retries a temporary 503 and falls back to the lightweight Gemini model", async () => {
-    mocks.generateContent
-      .mockRejectedValueOnce(Object.assign(new Error("Service unavailable"), { status: 503 }))
-      .mockRejectedValueOnce(Object.assign(new Error("Service unavailable"), { status: 503 }))
-      .mockResolvedValueOnce({ response: { text: () => JSON.stringify({
-        summary: "A relaxed birthday lunch.", highSideTotal: 100000, contingency: 15000,
-        budgetLines: [{ category: "Food", highEstimate: 70000, rationale: "Sample estimate." }, { category: "Cake", highEstimate: 30000, rationale: "Sample estimate." }],
-        tasks: [{ title: "Confirm venue", dueDate: "2030-01-01", category: "Venue" }], vendorCategories: ["Restaurants"], ideas: ["Add a playlist."],
-      }) } });
-    const { generateEventPlan } = await import("./ai");
-
-    const plan = await generateEventPlan({ kind: "Birthday", date: "2027-06-12", city: "Bengaluru", guests: 20, budget: 60000, style: "" });
-
-    expect(plan.summary).toBe("A relaxed birthday lunch.");
-    expect(mocks.getGenerativeModel.mock.calls.map((call) => call[1].model)).toEqual([
-      "gemini-3.8-flash", "gemini-3.8-flash", "gemini-3.5-flash-lite",
-    ]);
-  });
-
-  it("skips a stalled primary model and tries Flash-Lite without waiting for the global timeout", async () => {
-    mocks.generateContent
-      .mockRejectedValueOnce(new Error("Gemini model request timed out"))
-      .mockResolvedValueOnce({ response: { text: () => JSON.stringify({
-        summary: "A relaxed birthday lunch.", highSideTotal: 100000, contingency: 15000,
-        budgetLines: [{ category: "Food", highEstimate: 70000, rationale: "Sample estimate." }, { category: "Cake", highEstimate: 30000, rationale: "Sample estimate." }],
-        tasks: [{ title: "Confirm venue", dueDate: "2030-01-01", category: "Venue" }], vendorCategories: ["Restaurants"], ideas: ["Add a playlist."],
-      }) } });
-    const { generateEventPlan } = await import("./ai");
-
-    const plan = await generateEventPlan({ kind: "Birthday", date: "2027-06-12", city: "Bengaluru", guests: 20, budget: 60000, style: "" });
-
-    expect(plan.summary).toBe("A relaxed birthday lunch.");
-    expect(mocks.getGenerativeModel.mock.calls.map((call) => call[1].model)).toEqual([
-      "gemini-3.8-flash", "gemini-3.5-flash-lite",
-    ]);
   });
 });

@@ -10,6 +10,15 @@ const kinds: EventKind[] = ["Wedding", "Birthday", "Community", "Custom"];
 const money = (n: number) => formatINR(n, true);
 const newId = () => crypto.randomUUID();
 
+function cloudSyncError(error: unknown): string {
+  const code = (error as { code?: string })?.code || "";
+  if (code.includes("permission-denied")) return "Cloud sync denied by Firestore rules. Verify the published rules and signed-in account.";
+  if (code.includes("unavailable")) return "Firebase is temporarily unavailable. Your event stays on this screen; try again shortly.";
+  if (code.includes("failed-precondition")) return "Firestore is not ready for writes. Finish Firestore setup in Firebase Console.";
+  if (code.includes("invalid-argument")) return "Firestore rejected an event field. Refresh the app and try again.";
+  return `Cloud sync failed${code ? ` (${code})` : ""}. Check your connection and Firestore setup.`;
+}
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(!firebaseConfigured);
@@ -81,7 +90,7 @@ export default function App() {
         const syncedEvents = cloudEvents.map((event) => ({ ...event, isSample: false }));
         setEvents(syncedEvents);
         setActiveId((current) => syncedEvents.some((event) => event.id === current) ? current : syncedEvents[0]?.id || "");
-      }, () => setNotice("Could not sync your events. Check your Firestore rules and connection."));
+      }, (error) => setNotice(cloudSyncError(error)));
     }).catch(() => setNotice("Cloud sync could not start. Check your Firebase configuration."));
     return () => { cancelled = true; unsubscribe(); };
   }, [user]);
@@ -91,7 +100,7 @@ export default function App() {
   const persist = async (event: EventRecord) => {
     setEvents((all) => all.some((item) => item.id === event.id) ? all.map((item) => item.id === event.id ? event : item) : [event, ...all]);
     if (user) {
-      try { const { saveEvent } = await import("./lib/firebase"); await saveEvent(user.uid, event); } catch { setNotice("Saved locally for this session, but cloud sync failed. Check your Firebase rules."); }
+      try { const { saveEvent } = await import("./lib/firebase"); await saveEvent(user.uid, event); } catch (error) { setNotice(`Saved locally for this session. ${cloudSyncError(error)}`); }
     }
   };
 
@@ -161,6 +170,18 @@ export default function App() {
     finally { setBusy(""); }
   };
 
+  const changeSearchCity = (value: string) => {
+    setCityDraft(value);
+    setLocationCoordinates(undefined);
+    setPlaceResults([]);
+    setPlacePage(0);
+  };
+  const changePlaceCategory = (value: string) => {
+    setQuery(value);
+    setPlaceResults([]);
+    setPlacePage(0);
+  };
+
   const addGroundedPlace = (place: GroundedPlace) => {
     if (!active || active.vendors.some((vendor) => vendor.mapsUrl === place.mapsUrl)) { setNotice("This place is already in your shortlist."); return; }
     const vendor: EventVendor = { id: place.id, placeId: place.id, name: place.name, category: query || active.vendorCategories[0] || "Vendor", status: "Interested", mapsUrl: place.mapsUrl, rating: place.rating, source: place.source };
@@ -221,7 +242,7 @@ export default function App() {
               <div className="privacy-note"><span className="privacy-dot"></span><p>Your event details are stored in your private workspace.</p></div>
             </aside>
           </section>
-        </> : active ? <EventWorkspace event={active} onUpdate={updateEvent} onToggleTask={toggleTask} onVendorStatus={setVendorStatus} onAI={() => setDialog("ai")} onAddGuest={() => setDialog("guest")} onAddPlaces={addPlaces} onAddGroundedPlace={addGroundedPlace} placeResults={placeResults.slice(Math.max(0, placePage - 1) * 5, placePage * 5)} hasNextPlaces={placeResults.length === placePage * 5} busy={busy} query={query} setQuery={setQuery} cityDraft={cityDraft || active.city} setCityDraft={(value) => { setCityDraft(value); setLocationCoordinates(undefined); }} onLocation={requestLocation} onNotice={setNotice} /> : <div className="empty-state">No events yet. Create your first celebration to start planning.</div>}
+        </> : active ? <EventWorkspace event={active} onUpdate={updateEvent} onToggleTask={toggleTask} onVendorStatus={setVendorStatus} onAI={() => setDialog("ai")} onAddGuest={() => setDialog("guest")} onAddPlaces={addPlaces} onAddGroundedPlace={addGroundedPlace} placeResults={placeResults.slice(Math.max(0, placePage - 1) * 5, placePage * 5)} hasNextPlaces={placeResults.length === placePage * 5} busy={busy} query={query} setQuery={changePlaceCategory} cityDraft={cityDraft || active.city} setCityDraft={changeSearchCity} onLocation={requestLocation} onNotice={setNotice} /> : <div className="empty-state">No events yet. Create your first celebration to start planning.</div>}
       </div>
       <AppFooter onNavigate={navigate}/>
     </main>
@@ -252,7 +273,7 @@ function InfoPage({ route, onNavigate }: { route: string; onNavigate: (path: str
   const content = route === "/privacy" ? {
     title: "Privacy, in plain language",
     intro: "Gatherly AI stores the information you choose to add so you can plan your events. You stay in control of location sharing and vendor contact.",
-    sections: [["Information in your plans", "Your event title, type, date, city, guest count, budget, checklist, vendor shortlist and guest details are stored in your Firebase account. Firestore rules scope event data to the signed-in account."], ["Google services and place search", "Google Sign-In authenticates your account. If you request an AI plan, event type, city, date, guest count, budget and optional style notes are sent to Gemini through Firebase AI Logic to generate the draft. Vendor searches use Photon, a search service using OpenStreetMap data. The selected category and city—or device coordinates when you choose to share location—are sent to Photon. Results are limited to nearby map listings and category-filtered for cafes, bakeries and restaurants. Listing links open Google Maps."], ["Location and invitations", "Device location is only requested after you choose the location button and approve the browser prompt. You can type a city instead. Gatherly does not read your contacts or send invitations automatically; invitation links open your email app for you to review and send."], ["Your choices", "You can use the app without sharing device location. Avoid putting sensitive personal details in AI planning notes. For help with access or data deletion, contact the developer using the public source repository until an in-app deletion control is available."]],
+    sections: [["Information in your plans", "Your event title, type, date, city, guest count, budget, checklist, vendor shortlist and guest details are stored in your Firebase account. Firestore rules scope event data to the signed-in account."], ["Google services and place search", "Google Sign-In authenticates your account. If you request an AI plan, event type, city, date, guest count, budget and optional style notes are sent to the Gemini API to generate the draft. Vendor searches use Photon, a search service using OpenStreetMap data. The selected category and city—or device coordinates when you choose to share location—are sent to Photon. Results are limited to nearby listings and category-filtered for cafes, bakeries and restaurants. Listing links open Google Maps."], ["Location and invitations", "Device location is only requested after you choose the location button and approve the browser prompt. You can type a city instead. Gatherly does not read your contacts or send invitations automatically; invitation links open your email app for you to review and send."], ["Your choices", "You can use the app without sharing device location. Avoid putting sensitive personal details in AI planning notes. For help with access or data deletion, contact the developer using the public source repository until an in-app deletion control is available."]],
   } : route === "/about" ? {
     title: "A little more about Gatherly",
     intro: "Gatherly AI is a planning assistant for weddings, birthdays, and community events, built to make the moving parts feel more manageable.",
@@ -285,6 +306,7 @@ function EventWorkspace({ event, onUpdate, onToggleTask, onVendorStatus, onAI, o
   const [tab, setTab] = useState<"overview" | "vendors" | "guests">("overview");
   const [expanded, setExpanded] = useState<string | null>(null);
   const categories = event.vendorCategories.length ? event.vendorCategories : categoriesFor(event.kind, event.customKind);
+  const searchCategories = Array.from(new Set([...categories, "Cafes", "Restaurants", "Cake shops", "Banquet halls"]));
   const used = budgetUsed(event); const remaining = budgetRemaining(event); const tasksDone = event.tasks.filter((task) => task.done).length;
   const sortedTasks = [...event.tasks].sort((a,b) => a.dueDate.localeCompare(b.dueDate));
   return <>
@@ -303,7 +325,7 @@ function EventWorkspace({ event, onUpdate, onToggleTask, onVendorStatus, onAI, o
         </section>
       </div><aside className="workspace-right">
         <div className="side-heading"><h2>Venue & vendor shortlist</h2><button className="text-button" onClick={() => setTab("vendors")}>See all <ArrowRight size={15}/></button></div>
-        <section className="panel vendor-panel"><div className="vendor-intro"><span className="vendor-sparkle"><Compass size={17}/></span><div><strong>Find the right people</strong><p>Five real local listings at a time. Verify details with each business.</p></div></div><div className="location-controls"><label className="sr-only" htmlFor="vendor-city">Search area</label><input id="vendor-city" value={cityDraft} onChange={(e)=>setCityDraft(e.target.value)} placeholder="City or neighbourhood"/><button className="icon-button" aria-label="Use my location" onClick={onLocation}><MapPin size={16}/></button></div><div className="search-row"><label className="sr-only" htmlFor="vendor-category">Vendor category</label><input id="vendor-category" list="vendor-category-options" value={query || categories[0]} onChange={(e)=>setQuery(e.target.value)} placeholder="Cafe, cake shop, banquet…"/><datalist id="vendor-category-options">{categories.map((category)=><option key={category} value={category}/>)}</datalist><button className="search-button" disabled={busy === "places"} onClick={()=>onAddPlaces(false)}>{busy === "places" ? <LoaderCircle className="spin" size={16}/> : <Search size={16}/>}<span>Find</span></button></div>
+        <section className="panel vendor-panel"><div className="vendor-intro"><span className="vendor-sparkle"><Compass size={17}/></span><div><strong>Find the right people</strong><p>Five local listings near the city you choose. Verify details with each business.</p></div></div><div className="location-controls"><label className="sr-only" htmlFor="vendor-city">Search area</label><input id="vendor-city" value={cityDraft} onChange={(e)=>setCityDraft(e.target.value)} placeholder="City or neighbourhood"/><button className="icon-button" aria-label="Use my location" onClick={onLocation}><MapPin size={16}/></button></div><div className="search-row"><label className="sr-only" htmlFor="vendor-category">Vendor category</label><select id="vendor-category" value={query || categories[0]} onChange={(e)=>setQuery(e.target.value)}>{searchCategories.map((category)=><option key={category} value={category}>{category}</option>)}</select><button className="search-button" disabled={busy === "places"} onClick={()=>onAddPlaces(false)}>{busy === "places" ? <LoaderCircle className="spin" size={16}/> : <Search size={16}/>}<span>Find</span></button></div>
           {placeResults.length > 0 && <><p className="grounding-attribution">{placeResults[0]?.source === "google" ? <>Grounded by Google Maps</> : <>OpenStreetMap data via Photon · <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a></>} · Showing {placeResults.length} options</p><div className="grounded-results">{placeResults.map((place)=><GroundedPlaceCard key={place.id} place={place} saved={event.vendors.some((vendor)=>vendor.mapsUrl===place.mapsUrl)} onInterested={()=>onAddGroundedPlace(place)}/>)}</div>{hasNextPlaces && <button className="panel-link" disabled={busy === "places"} onClick={()=>onAddPlaces(true)}>{busy === "places" ? "Finding more…" : "Next five places"}<ArrowRight size={15}/></button>}</>}
           <div className="vendor-shortlist">{event.vendors.slice(0, 3).map((vendor) => <VendorRow key={vendor.id} vendor={vendor} expanded={expanded===vendor.id} onExpand={()=>setExpanded(expanded===vendor.id?null:vendor.id)} onStatus={onVendorStatus}/>)}</div>
           {!event.vendors.length && <div className="vendor-empty"><div className="empty-illustration"><MapPin size={20}/></div><strong>Your shortlist starts here</strong><p>Search grounded local listings for {eventKindLabel(event).toLowerCase()} vendors. Compare and contact them yourself.</p></div>}
@@ -313,7 +335,7 @@ function EventWorkspace({ event, onUpdate, onToggleTask, onVendorStatus, onAI, o
         <div className="event-note"><Clock3 size={15}/><span>{daysUntil(event.date) < 0 ? "This date has passed" : daysUntil(event.date) === 0 ? "The celebration is today" : `${daysUntil(event.date)} days until the celebration`}</span></div>
       </aside></div>
     </>}
-    {tab === "vendors" && <section className="panel full-panel"><div className="panel-title"><div><h2>Vendor shortlist</h2><p>Interested vendors are saved here. Confirm after you contact and agree with them.</p></div></div><div className="vendor-category-chips">{categories.map((c)=><button key={c} className={`category-chip ${query===c?"selected":""}`} onClick={()=>setQuery(c)}>{c}</button>)}</div><div className="vendor-search-large"><input aria-label="City" value={cityDraft} onChange={(e)=>setCityDraft(e.target.value)} placeholder="City or neighbourhood"/><input aria-label="Vendor type" list="vendor-category-options" value={query || categories[0]} onChange={(e)=>setQuery(e.target.value)} placeholder="Cafe, cake shop, banquet…"/><datalist id="vendor-category-options">{categories.map((c)=><option key={c} value={c}/>)}</datalist><button className="primary-button" disabled={busy === "places"} onClick={()=>onAddPlaces(false)}>{busy === "places"?<LoaderCircle className="spin" size={16}/>:<Search size={16}/>}Find local vendors</button></div>{placeResults.length > 0 && <><p className="grounding-attribution">{placeResults[0]?.source === "google" ? <>Grounded by Google Maps</> : <>OpenStreetMap data via Photon · <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a></>} · Showing {placeResults.length} options</p><div className="grounded-results">{placeResults.map((place)=><GroundedPlaceCard key={place.id} place={place} saved={event.vendors.some((vendor)=>vendor.mapsUrl===place.mapsUrl)} onInterested={()=>onAddGroundedPlace(place)}/>)}</div>{hasNextPlaces && <button className="panel-link" disabled={busy === "places"} onClick={()=>onAddPlaces(true)}>{busy === "places" ? "Finding more…" : "Next five places"}<ArrowRight size={15}/></button>}</>}{event.vendors.length ? <div className="vendor-list">{event.vendors.map(vendor=><VendorRow key={vendor.id} vendor={vendor} expanded={expanded===vendor.id} onExpand={()=>setExpanded(expanded===vendor.id?null:vendor.id)} onStatus={onVendorStatus}/>)}</div> : <div className="empty-state wide-empty"><Compass size={22}/><strong>Your shortlist is ready for its first name.</strong><p>Choose a category and search to find local options.</p></div>}</section>}
+    {tab === "vendors" && <section className="panel full-panel"><div className="panel-title"><div><h2>Vendor shortlist</h2><p>Interested vendors are saved here. Confirm after you contact and agree with them.</p></div></div><div className="vendor-category-chips">{searchCategories.map((c)=><button key={c} className={`category-chip ${query===c?"selected":""}`} onClick={()=>setQuery(c)}>{c}</button>)}</div><div className="vendor-search-large"><input aria-label="City" value={cityDraft} onChange={(e)=>setCityDraft(e.target.value)} placeholder="City or neighbourhood"/><select aria-label="Vendor type" value={query || categories[0]} onChange={(e)=>setQuery(e.target.value)}>{searchCategories.map((c)=><option key={c} value={c}>{c}</option>)}</select><button className="primary-button" disabled={busy === "places"} onClick={()=>onAddPlaces(false)}>{busy === "places"?<LoaderCircle className="spin" size={16}/>:<Search size={16}/>}Find local vendors</button></div>{placeResults.length > 0 && <><p className="grounding-attribution">OpenStreetMap data via Photon · <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a> · Showing {placeResults.length} options</p><div className="grounded-results">{placeResults.map((place)=><GroundedPlaceCard key={place.id} place={place} saved={event.vendors.some((vendor)=>vendor.mapsUrl===place.mapsUrl)} onInterested={()=>onAddGroundedPlace(place)}/>)}</div>{hasNextPlaces && <button className="panel-link" disabled={busy === "places"} onClick={()=>onAddPlaces(true)}>{busy === "places" ? "Finding more…" : "Next five places"}<ArrowRight size={15}/></button>}</>}{event.vendors.length ? <div className="vendor-list">{event.vendors.map(vendor=><VendorRow key={vendor.id} vendor={vendor} expanded={expanded===vendor.id} onExpand={()=>setExpanded(expanded===vendor.id?null:vendor.id)} onStatus={onVendorStatus}/>)}</div> : <div className="empty-state wide-empty"><Compass size={22}/><strong>Your shortlist is ready for its first name.</strong><p>Choose a category and search to find local options.</p></div>}</section>}
     {tab === "guests" && <section className="panel full-panel"><div className="panel-title"><div><h2>The people who make it special</h2><p>{event.guestsList.length} guests · invitations are opened and sent by you</p></div><button className="primary-button" onClick={onAddGuest}><Plus size={16}/>Add guests</button></div>{event.guestsList.length ? <div className="guest-list">{event.guestsList.map(guest=><div className="guest-row" key={guest.id}><span className="guest-avatar">{guest.name[0]}</span><span className="guest-name"><strong>{guest.name}</strong><small>{guest.email || "No email added"}</small></span><span className={`guest-status ${guest.invited?"sent":"pending"}`}>{guest.invited?"Invitation prepared":"Not invited"}</span><a className="outline-button compact" href={emailInviteUrl(event, guest.name, guest.email)} onClick={()=>onUpdate({ guestsList:event.guestsList.map(item=>item.id===guest.id?{...item,invited:true}:item)})}><Send size={14}/>Prepare invite</a></div>)}</div> : <div className="empty-state wide-empty"><Users size={22}/><strong>Every good gathering starts with its people.</strong><p>Add guests, then open a personal invitation in your email app.</p><button className="outline-button" onClick={onAddGuest}><Plus size={15}/>Add first guest</button></div>}</section>}
   </>;
 }
