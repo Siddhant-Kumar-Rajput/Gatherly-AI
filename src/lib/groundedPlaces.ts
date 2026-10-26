@@ -43,6 +43,72 @@ type OverpassElement = {
   tags?: Record<string, string>;
 };
 
+type MapsGroundingResponse = {
+  candidates?: Array<{ groundingMetadata?: { groundingChunks?: Array<{ maps?: { title?: string; uri?: string; text?: string; placeId?: string } }> } }>;
+  error?: { message?: string };
+};
+
+const GEMINI_API_KEYS = [
+  import.meta.env.VITE_GEMINI_API_KEY,
+  import.meta.env.VITE_GEMINI_API_KEY_2,
+  import.meta.env.VITE_GEMINI_API_KEY_3,
+].filter((key): key is string => typeof key === "string" && key.trim().length > 0);
+
+async function searchGoogleMapsGroundedPlaces(
+  category: string,
+  location: string,
+  latitude: number,
+  longitude: number,
+  excludeNames: string[],
+): Promise<GroundedPlace[]> {
+  const excluded = excludeNames.length ? ` Do not repeat these places: ${excludeNames.slice(0, 30).join(", ")}.` : "";
+  const prompt = `Find up to five real ${category} businesses in ${location}, India, near the provided coordinates. Only return places Google Maps can ground. Keep results within ${location}; do not include nearby cities. We need actual businesses, not general advice.${excluded}`;
+  let lastError: unknown;
+  for (const apiKey of GEMINI_API_KEYS) {
+    try {
+      const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          tools: [{ googleMaps: {} }],
+          toolConfig: { retrievalConfig: { latLng: { latitude, longitude } } },
+          generationConfig: { maxOutputTokens: 600, thinkingConfig: { thinkingLevel: "MINIMAL" } },
+        }),
+        signal: AbortSignal.timeout(16_000),
+      });
+      const payload = await response.json() as MapsGroundingResponse;
+      if (!response.ok) {
+        const error = new Error(payload.error?.message || `Maps grounding returned HTTP ${response.status}.`) as Error & { status?: number };
+        error.status = response.status;
+        throw error;
+      }
+      const chunks = payload.candidates?.flatMap((candidate) => candidate.groundingMetadata?.groundingChunks || []) || [];
+      const seen = new Set(excludeNames.map((name) => name.trim().toLocaleLowerCase()));
+      return chunks.flatMap(({ maps }) => {
+        const name = maps?.title?.trim();
+        if (!name || seen.has(name.toLocaleLowerCase())) return [];
+        seen.add(name.toLocaleLowerCase());
+        return [{
+          id: maps?.placeId || `google:${name.toLocaleLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+          name,
+          mapsUrl: maps?.uri || mapUrl(name, location),
+          description: maps?.text || undefined,
+          source: "google" as const,
+        }];
+      }).slice(0, 5);
+    } catch (error) {
+      lastError = error;
+      const status = (error as Error & { status?: number })?.status;
+      if (status === 401 || status === 403) continue;
+      break;
+    }
+  }
+  // OpenStreetMap is a useful no-key source when Maps grounding is unavailable.
+  if (lastError) console.warn("Google Maps grounding was unavailable; using OpenStreetMap results when present.");
+  return [];
+}
+
 function overpassTags(category: string): Array<[string, string]> {
   const normalized = category.toLocaleLowerCase();
   if (/cake|baker/.test(normalized)) return [["shop", "bakery"], ["shop", "confectionery"], ["craft", "baker"]];
@@ -97,7 +163,7 @@ function getUniquePlaces(places: GroundedPlace[], excludeNames: string[]): Groun
   }).slice(0, 5);
 }
 
-async function searchLocalPlaces(category: string, location: string, coordinates?: { latitude: number; longitude: number }): Promise<GroundedPlace[]> {
+async function searchLocalPlaces(category: string, location: string, coordinates?: { latitude: number; longitude: number }): Promise<{ places: GroundedPlace[]; center: { latitude: number; longitude: number }; resolvedLocation: string }> {
   let latitude = coordinates?.latitude;
   let longitude = coordinates?.longitude;
   let targetCity: string | undefined;
@@ -129,7 +195,7 @@ async function searchLocalPlaces(category: string, location: string, coordinates
   const payload = await response.json() as { elements?: OverpassElement[] };
   const center: [number, number] = [longitude!, latitude!];
   const maxDistanceKm = coordinates ? 8 : targetCity ? 12 : 8;
-  return (payload.elements || []).flatMap((element) => {
+  const places = (payload.elements || []).flatMap((element) => {
     const tags = element.tags || {};
     const name = tags.name || tags.brand || tags.operator;
     const listedCity = tags["addr:city"];
@@ -150,6 +216,7 @@ async function searchLocalPlaces(category: string, location: string, coordinates
       source: "openstreetmap" as const,
     }];
   });
+  return { places, center: { latitude: latitude!, longitude: longitude! }, resolvedLocation: targetCity || location };
 }
 
 export async function searchGroundedPlaces({
@@ -170,8 +237,15 @@ export async function searchGroundedPlaces({
   const cached = resultCache.get(cacheKey);
   if (cached && Date.now() - cached.savedAt < 10 * 60_000) return getUniquePlaces(cached.places, excludeNames);
 
-  const places = await searchLocalPlaces(category.trim(), location.trim(), coordinates);
-  resultCache.set(cacheKey, { savedAt: Date.now(), places });
-  if (resultCache.size > 30) resultCache.delete(resultCache.keys().next().value!);
-  return getUniquePlaces(places, excludeNames);
+  const { places, center, resolvedLocation } = await searchLocalPlaces(category.trim(), location.trim(), coordinates);
+  const page = getUniquePlaces(places, excludeNames);
+  if (places.length) {
+    resultCache.set(cacheKey, { savedAt: Date.now(), places });
+    if (resultCache.size > 30) resultCache.delete(resultCache.keys().next().value!);
+    return page;
+  }
+
+  // OSM business coverage varies by city. When it has no listings, ask Gemini
+  // to ground the query in Google Maps at the geocoded city center.
+  return searchGoogleMapsGroundedPlaces(category.trim(), resolvedLocation, center.latitude, center.longitude, excludeNames);
 }

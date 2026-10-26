@@ -70,6 +70,29 @@ describe("searchGroundedPlaces", () => {
     expect(query).toContain("[\"shop\"=\"confectionery\"]");
   });
 
+  it("falls back to real Google Maps-grounded businesses when local map data is empty", async () => {
+    vi.stubEnv("VITE_GEMINI_API_KEY", "test-only-key");
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ features: [cityFeature] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ elements: [] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ candidates: [{ groundingMetadata: { groundingChunks: [
+        { maps: { title: "Haldwani Cake House", uri: "https://maps.google.com/?cid=123", placeId: "places/123", text: "Bakery in Haldwani" } },
+        { maps: { title: "Haldwani Cake House", uri: "https://maps.google.com/?cid=123" } },
+      ] } }] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { searchGroundedPlaces } = await import("./groundedPlaces");
+    const places = await searchGroundedPlaces({ category: "Cake shops", location: "Test City" });
+
+    expect(places).toHaveLength(1);
+    expect(places[0]).toMatchObject({ name: "Haldwani Cake House", source: "google", mapsUrl: "https://maps.google.com/?cid=123" });
+    const [url, options] = fetchMock.mock.calls[2];
+    expect(String(url)).toContain("gemini-3.5-flash-lite:generateContent");
+    expect(options.headers["x-goog-api-key"]).toBe("test-only-key");
+    const body = JSON.parse(options.body);
+    expect(body.tools).toEqual([{ googleMaps: {} }]);
+    expect(body.toolConfig.retrievalConfig.latLng).toEqual({ latitude: 12.9, longitude: 77.6 });
+  });
+
   it("uses local OpenStreetMap results even when a Gemini key is configured", async () => {
     vi.stubEnv("VITE_GEMINI_API_KEY", "test-only-key");
     const fetchMock = mockCityAndPlaces();
