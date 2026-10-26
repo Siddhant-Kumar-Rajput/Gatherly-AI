@@ -21,6 +21,7 @@ function cloudSyncError(error: unknown): string {
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
+  const [guestMode, setGuestMode] = useState(false);
   const [authReady, setAuthReady] = useState(!firebaseConfigured);
   const [route, setRoute] = useState(window.location.pathname);
   const [events, setEvents] = useState<EventRecord[]>([]);
@@ -50,8 +51,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (authReady && route === "/app" && !user) navigate("/");
-  }, [authReady, route, user]);
+    if (authReady && route === "/app" && !user && !guestMode) navigate("/");
+  }, [authReady, route, user, guestMode]);
 
   useEffect(() => {
     if (!firebaseConfigured) return;
@@ -64,6 +65,7 @@ export default function App() {
         if (cancelled) return;
       unsubscribe = onAuthStateChanged(auth, (signed) => {
         setUser(signed ? { uid: signed.uid, displayName: signed.displayName || "Gatherly member", email: signed.email || "", photoURL: signed.photoURL || undefined } : null);
+        if (signed) setGuestMode(false);
         setAuthReady(true);
         if (signed) {
           setEvents([]);
@@ -95,10 +97,29 @@ export default function App() {
     return () => { cancelled = true; unsubscribe(); };
   }, [user]);
 
+  useEffect(() => {
+    if (!guestMode || user) return;
+    try {
+      const saved = window.localStorage.getItem("gatherly.events.v1");
+      const localEvents = saved ? JSON.parse(saved) as EventRecord[] : [];
+      setEvents(Array.isArray(localEvents) ? localEvents.filter((event) => event && typeof event.id === "string" && typeof event.title === "string") : []);
+      setActiveId((current) => current || (Array.isArray(localEvents) ? localEvents[0]?.id || "" : ""));
+    } catch {
+      setEvents([]);
+      setActiveId("");
+      setNotice("This browser’s saved event data could not be read. You can start a fresh plan.");
+    }
+  }, [guestMode, user]);
+
   useEffect(() => { if (!notice) return; const timer = window.setTimeout(() => setNotice(""), 4500); return () => clearTimeout(timer); }, [notice]);
 
   const persist = async (event: EventRecord) => {
-    setEvents((all) => all.some((item) => item.id === event.id) ? all.map((item) => item.id === event.id ? event : item) : [event, ...all]);
+    const nextEvents = events.some((item) => item.id === event.id) ? events.map((item) => item.id === event.id ? event : item) : [event, ...events];
+    setEvents(nextEvents);
+    if (!user && guestMode) {
+      try { window.localStorage.setItem("gatherly.events.v1", JSON.stringify(nextEvents)); }
+      catch { setNotice("This browser could not save the event. Check available storage and try again."); }
+    }
     if (user) {
       try { const { saveEvent } = await import("./lib/firebase"); await saveEvent(user.uid, event); } catch (error) { setNotice(`Saved locally for this session. ${cloudSyncError(error)}`); }
     }
@@ -107,12 +128,20 @@ export default function App() {
   const login = async () => {
     if (!firebaseConfigured) { setNotice("Google sign-in is not configured yet. Add the Firebase web app settings to .env.local."); return; }
     setBusy("login");
-    try { const { signInWithGoogle } = await import("./lib/firebase"); const signed = await signInWithGoogle(); setUser({ uid: signed.uid, displayName: signed.displayName || "Gatherly member", email: signed.email || "", photoURL: signed.photoURL || undefined }); navigate("/app"); setNotice("Signed in with Google."); }
+    try {
+      const { signInWithGoogle, saveEvent } = await import("./lib/firebase");
+      const signed = await signInWithGoogle();
+      if (guestMode && events.length) await Promise.all(events.map((event) => saveEvent(signed.uid, event)));
+      setGuestMode(false);
+      setUser({ uid: signed.uid, displayName: signed.displayName || "Gatherly member", email: signed.email || "", photoURL: signed.photoURL || undefined });
+      navigate("/app");
+      setNotice(guestMode && events.length ? "Signed in. Your browser plans are syncing to your account." : "Signed in with Google.");
+    }
     catch (error) { setNotice(error instanceof Error ? error.message : "Google sign-in failed."); }
     finally { setBusy(""); }
   };
 
-  const logout = async () => { const { signOutUser } = await import("./lib/firebase"); await signOutUser(); setUser(null); setEvents([]); setActiveId(""); setScreen("overview"); navigate("/"); setNotice("You are signed out."); };
+  const logout = async () => { if (user) { const { signOutUser } = await import("./lib/firebase"); await signOutUser(); } setUser(null); setGuestMode(false); setEvents([]); setActiveId(""); setScreen("overview"); navigate("/"); setNotice("You are signed out."); };
 
   const createEvent = (form: FormData) => {
     const kind = form.get("kind") as EventKind;
@@ -204,12 +233,12 @@ export default function App() {
   const filteredEvents = events.filter((event) => `${event.title} ${event.city} ${event.kind}`.toLowerCase().includes(query.toLowerCase()));
   if (!authReady) return <div className="loading-screen" role="status"><LogoMark/><p>Getting your celebration space ready…</p></div>;
   if (route === "/privacy" || route === "/about" || route === "/terms") return <InfoPage route={route} onNavigate={navigate} />;
-  if (route !== "/app") return <Landing onLogin={login} onOpenApp={() => navigate("/app")} signedIn={Boolean(user)} onDismiss={() => setNotice("")} busy={busy === "login"} configured={firebaseConfigured} notice={notice}/>;
-  if (!user) return <div className="loading-screen" role="status"><LogoMark/><p>Opening your private workspace…</p></div>;
+  if (route !== "/app") return <Landing onLogin={login} onOpenApp={() => { if (!user) setGuestMode(true); navigate("/app"); }} signedIn={Boolean(user)} onDismiss={() => setNotice("")} busy={busy === "login"} configured={firebaseConfigured} notice={notice}/>;
+  if (!user && !guestMode) return <div className="loading-screen" role="status"><LogoMark/><p>Opening your private workspace…</p></div>;
   return <div className="app-shell">
     <aside className={`sidebar ${menuOpen ? "open" : ""}`} aria-label="Main navigation">
       <div className="brand"><LogoMark/><span>Gatherly<span className="brand-ai"> AI</span></span><button className="mobile-close icon-button" aria-label="Close menu" onClick={() => setMenuOpen(false)}><X size={18}/></button></div>
-      <div className="workspace-label">Your workspace</div>
+      <div className="workspace-label">{guestMode ? "Private browser workspace" : "Your workspace"}</div>
       <nav className="nav-list">
         <button className={`nav-item ${screen === "overview" ? "selected" : ""}`} onClick={() => { setScreen("overview"); setMenuOpen(false); }}><LayoutDashboard size={17}/>Overview</button>
         <button className={`nav-item ${screen === "event" ? "selected" : ""}`} onClick={() => { setScreen("event"); setMenuOpen(false); }}><CalendarDays size={17}/>My events<span className="nav-count">{events.length}</span></button>
@@ -226,6 +255,7 @@ export default function App() {
       <header className="mobile-header"><button className="icon-button" aria-label="Open navigation" onClick={() => setMenuOpen(true)}><Menu size={19}/></button><span>Gatherly<span className="brand-ai"> AI</span></span><button className="icon-button" aria-label="Create event" onClick={() => setDialog("event")}><Plus size={20}/></button></header>
       <div className="content-wrap">
         <div className="topline"><span>{screen === "overview" ? new Intl.DateTimeFormat("en-IN", { weekday: "long", month: "long", day: "numeric", year: "numeric" }).format(new Date()) : <><button className="back-link" onClick={() => setScreen("overview")}><ArrowLeft size={14}/> Events</button><span className="crumb-divider">/</span>{active?.title || "Your events"}</>}</span><button className="avatar top-avatar" aria-label={user ? `Signed in as ${user.displayName}` : "Guest profile"} onClick={user ? logout : login}>{user?.photoURL ? <img src={user.photoURL} alt=""/> : user?.displayName?.[0] || "G"}</button></div>
+        {guestMode && !user && <div className="workspace-notice"><span><strong>Browser workspace</strong> · Your plans save on this device. Sign in with Google to sync them to Firestore.</span><button className="text-button" onClick={login} disabled={!firebaseConfigured || busy === "login"}>{busy === "login" ? "Connecting…" : "Sign in"}<ArrowRight size={15}/></button></div>}
         {screen === "overview" ? <>
           <section className="greeting-row"><div><h1>Make room for <em>the good stuff.</em></h1><p className="subtitle">The details are in good hands. Here’s what’s taking shape.</p></div><button className="primary-button" onClick={() => setDialog("event")}><Plus size={17}/>Plan an event</button></section>
           <section className="overview-layout">
@@ -257,7 +287,7 @@ export default function App() {
 function Landing({ onLogin, onOpenApp, signedIn, onDismiss, busy, configured, notice }: { onLogin: () => void; onOpenApp: () => void; signedIn: boolean; onDismiss: () => void; busy: boolean; configured: boolean; notice: string }) {
   return <main className="landing-page">
     <nav className="landing-nav" aria-label="Welcome navigation"><a className="landing-brand" href="#home" aria-label="Gatherly AI home"><LogoMark/><span>Gatherly<span> AI</span></span></a><div className="landing-nav-actions"><a href="#how-it-works">How it works</a>{signedIn ? <button className="landing-signin landing-signup" onClick={onOpenApp}>Open planner</button> : <><button className="landing-text-signin" onClick={onLogin} disabled={busy}>Sign in</button><button className="landing-signin landing-signup" onClick={onLogin} disabled={busy}>Create account</button></>}</div></nav>
-    <section className="landing-hero" id="home"><div className="landing-copy"><p className="landing-eyebrow"><span></span> A calmer way to bring people together</p><h1>Make room for <em>the good stuff.</em></h1><p className="landing-lede">One thoughtful place to plan the celebration, find local vendors, keep your budget on track, and bring your people along.</p><div className="landing-actions">{signedIn ? <button className="landing-google" onClick={onOpenApp}><ArrowRight size={18}/>Open your planner</button> : <button className="landing-google" onClick={onLogin} disabled={busy}>{busy ? <LoaderCircle className="spin" size={18}/> : <GoogleMark/>}{busy ? "Connecting to Google…" : "Continue with Google"}</button>}</div><p className="landing-auth-note">{signedIn ? "Your account is ready. Continue to your private event workspace." : "New to Gatherly? Google creates your account when you continue. Your private plans sync to your account."}</p>{!configured && <p className="landing-config-note" role="status">Google sign-in needs Firebase web app settings in <code>.env.local</code>.</p>}</div><div className="landing-art" role="img" aria-label="An animated isometric celebration scene with a cake, gifts, balloons and party table"><div className="scene-glow"></div><div className="scene-sparkles" aria-hidden="true"><i>✦</i><i>✳</i><i>✦</i><i>·</i><i>✧</i></div><svg className="party-scene" viewBox="0 0 620 470" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><ellipse cx="316" cy="399" rx="211" ry="34" fill="#63507D" fillOpacity=".13"/><g className="scene-balloon balloon-left"><path d="M143 172c-33-1-46-25-40-55 6-27 30-45 50-39 22 6 30 34 22 61-6 20-17 31-32 33Z" fill="#F472B6"/><path d="m143 172-6 11 9-3" fill="#C93A87"/><path d="M143 180c2 22 5 37 15 56" stroke="#AA598D" strokeWidth="2" strokeDasharray="4 7"/><ellipse cx="132" cy="112" rx="6" ry="13" transform="rotate(22 132 112)" fill="white" fillOpacity=".55"/></g><g className="scene-balloon balloon-right"><path d="M466 132c-31 0-45-22-40-51 5-27 27-45 48-40 22 5 31 31 25 56-5 21-17 34-33 35Z" fill="#FBBF24"/><path d="m466 132-6 10 9-2" fill="#D88C17"/><path d="M467 140c0 19-2 35-13 54" stroke="#AA8550" strokeWidth="2" strokeDasharray="4 7"/><ellipse cx="455" cy="78" rx="5" ry="11" transform="rotate(20 455 78)" fill="white" fillOpacity=".6"/></g><g className="scene-confetti"><path d="m205 112 9-12 5 4-9 12z" fill="#8B5CF6"/><path d="m385 178 12-7 3 5-12 7z" fill="#34D399"/><circle cx="487" cy="244" r="4" fill="#F472B6"/><circle cx="118" cy="275" r="4" fill="#8B5CF6"/><path d="m403 92 3-13 6 2-3 13z" fill="#F472B6"/></g><g className="scene-plinth"><path d="m174 342 139-80 139 80-139 81-139-81Z" fill="#B9A3E6"/><path d="m174 342 139 81v-25l-139-80v24Z" fill="#9274CC"/><path d="m313 423 139-81v-24l-139 80v25Z" fill="#7656B7"/><path d="m207 343 106-61 106 61-106 62-106-62Z" fill="#DCCEF4"/></g><g className="scene-gifts"><path d="m365 326 37-22 40 23-38 23-39-24Z" fill="#F472B6"/><path d="m365 326 39 24v26l-39-25v-25Z" fill="#D94A9B"/><path d="m404 350 38-23v26l-38 23v-26Z" fill="#B83C81"/><path d="m397 321 11-7c7-5 12 4 6 8l-10 6m-8-7-9-9c-6-7 3-11 8-6l8 10" stroke="#FFF4D6" strokeWidth="4" strokeLinecap="round"/><path d="m181 324 28-17 31 18-29 18-30-19Z" fill="#34D399"/><path d="m181 324 30 19v19l-30-19v-19Z" fill="#1DAB76"/><path d="m211 343 29-18v20l-29 17v-19Z" fill="#16855C"/><path d="m205 319 8-6c5-4 9 2 5 5l-7 5m-6-5-7-7c-5-5 1-9 5-5l6 7" stroke="#FFF4D6" strokeWidth="3" strokeLinecap="round"/></g><g className="scene-cake"><path d="m249 272 64-37 68 39-66 39-66-41Z" fill="#FFFDF5"/><path d="m249 272 66 41v32l-66-41v-32Z" fill="#F7B4D3"/><path d="m315 313 66-39v31l-66 40v-32Z" fill="#E98DBB"/><path d="m249 272 64-37 68 39-66 39-66-41Z" fill="#FFF8E7"/><path d="m251 269 62-35 63 37-63 37-62-39Z" fill="#FFFDF5"/><path d="M280 260v-15m34-3v-17m34 37v-15" stroke="#8B5CF6" strokeWidth="5" strokeLinecap="round"/><path d="M280 242c-5-8 5-11 0-18m34 3c-5-8 5-11 0-18m34 33c-5-8 5-11 0-18" stroke="#FBBF24" strokeWidth="3" strokeLinecap="round"/><circle cx="314" cy="219" r="5" fill="#F472B6"/><circle cx="280" cy="223" r="4" fill="#34D399"/><circle cx="348" cy="234" r="4" fill="#34D399"/><path d="m264 271 9 5m10 6 9 5m48-8 9-5m8-5 8-5" stroke="#E58AB8" strokeWidth="3" strokeLinecap="round"/></g><g className="scene-flowers"><path d="M234 303c-3-20-4-38-2-53m1 43c-15-12-19-21-20-32m21 24c11-14 15-22 16-35" stroke="#4D8B69" strokeWidth="3" strokeLinecap="round"/><ellipse cx="225" cy="279" rx="11" ry="5" transform="rotate(36 225 279)" fill="#64A57B"/><ellipse cx="247" cy="276" rx="11" ry="5" transform="rotate(-40 247 276)" fill="#78B486"/><circle cx="232" cy="246" r="8" fill="#F472B6"/><circle cx="211" cy="260" r="6" fill="#FBBF24"/><circle cx="249" cy="258" r="6" fill="#8B5CF6"/></g></svg><div className="art-card"><span><Sparkles size={15}/></span><div><strong>Your plans, in one place</strong><small>Ideas · checklist · local vendors</small></div></div><div className="scene-sticker sticker-top"><span>✦</span>LET’S CELEBRATE</div><div className="scene-sticker sticker-bottom">MADE FOR YOUR MOMENT <span>♥</span></div></div></section>
+    <section className="landing-hero" id="home"><div className="landing-copy"><p className="landing-eyebrow"><span></span> A calmer way to bring people together</p><h1>Make room for <em>the good stuff.</em></h1><p className="landing-lede">A thoughtful place to shape the day, set a budget, keep the details moving and bring your people along.</p><div className="landing-actions">{signedIn ? <button className="landing-google" onClick={onOpenApp}><ArrowRight size={18}/>Open your planner</button> : <button className="landing-google" onClick={onLogin} disabled={busy}>{busy ? <LoaderCircle className="spin" size={18}/> : <GoogleMark/>}{busy ? "Connecting to Google…" : "Continue with Google"}</button>}</div><p className="landing-auth-note">{signedIn ? "Your workspace is ready." : "Sign in to sync your plans, or try the planner first."}</p><button className="guest-entry" onClick={onOpenApp}>Explore without an account <ArrowRight size={15}/></button>{!configured && <p className="landing-config-note" role="status">Google sign-in is not configured for this build. You can still explore the planner and save events in this browser.</p>}</div><div className="landing-art" aria-label="A preview of an event planning workspace"><div className="hero-orbit orbit-one"></div><div className="hero-orbit orbit-two"></div><div className="hero-note note-one"><Sparkles size={16}/> Ideas, made personal</div><div className="hero-note note-two"><Check size={16}/> Budget in balance</div><div className="hero-preview"><div className="preview-top"><span className="preview-dot"></span><span className="preview-dot"></span><span className="preview-dot"></span><small>Your celebration</small></div><div className="preview-cover"><span>YOUR DAY, YOUR WAY</span><strong>A little more joy<br/>in every detail.</strong><div className="preview-flower">✿</div></div><div className="preview-stats"><span><small>Budget plan</small><strong>On track <i>✓</i></strong></span><span><small>Next milestone</small><strong>Choose your venue</strong></span></div><div className="preview-progress"><i></i></div><div className="preview-bottom"><span><b>3</b> thoughtful ideas</span><span><b>8</b> next steps</span><span><b>4</b> vendor types</span></div></div></div></section>
     <section className="landing-features" aria-label="Ways Gatherly helps"><article><span className="feature-icon"><CalendarDays size={18}/></span><h2>Wedding days</h2><p>Coordinate venues, catering, guest details and the moments in between.</p></article><article><span className="feature-icon"><Sparkles size={18}/></span><h2>Birthdays & milestones</h2><p>Shape a celebration around your people, style and budget.</p></article><article><span className="feature-icon"><Compass size={18}/></span><h2>Community gatherings</h2><p>Keep local options, volunteers and next steps easy to find.</p></article></section>
     <section className="landing-how" id="how-it-works"><div><p className="landing-eyebrow"><span></span> Thoughtful planning, one step at a time</p><h2>From first idea to <em>“see you there.”</em></h2></div><div className="how-steps"><p><CalendarDays size={18}/><strong>Start with the essentials</strong><small>Set a date, city, guest count and maximum budget.</small></p><p><Sparkles size={18}/><strong>Build a plan that fits</strong><small>Use Gemini for a first draft of ideas, budget ranges and a checklist.</small></p><p><Compass size={18}/><strong>Choose your own vendors</strong><small>Shortlist local listings and contact each vendor directly.</small></p></div></section>
     <section className="landing-cta"><div><p className="landing-eyebrow"><span></span> Your next gathering starts here</p><h2>Ready when you are.</h2><p>{signedIn ? "Your workspace is ready." : "Sign in to keep your event plans with you."}</p></div>{signedIn ? <button className="landing-google" onClick={onOpenApp}><ArrowRight size={18}/>Open your planner</button> : <button className="landing-google" onClick={onLogin} disabled={busy}>{busy ? <LoaderCircle className="spin" size={18}/> : <GoogleMark/>}{busy ? "Connecting to Google…" : "Continue with Google"}</button>}</section>

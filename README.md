@@ -5,6 +5,7 @@ Gatherly AI is a responsive event-planning workspace for weddings, birthdays, co
 ## What works
 
 - A public landing page with Google sign-in, plus persistent About, Privacy, and Terms pages.
+- A no-account guest workspace for evaluating the complete planning flow; guest events stay in this browser, with an option to sync them to Firestore after Google sign-in.
 - Google sign-in and a private Firestore workspace when Firebase is configured.
 - Event-specific vendor categories; five-at-a-time nearby OpenStreetMap discovery with Google Maps-grounded Gemini fallback when local map data is sparse; users contact and confirm vendors themselves.
 - Gemini first-draft plans with budget, contingency, timeline tasks, and vendor categories. Figures are planning estimates, never quotes or confirmed availability.
@@ -23,7 +24,7 @@ npm test
 npm run build
 ```
 
-Copy `.env.example` to `.env.local`. Firebase values are web-app configuration, not server secrets. AI plan generation uses Gemini 3.5 Flash-Lite with a short structured response and a Gemini Flash fallback; if Gemini quota is unavailable, it creates an explicitly labeled editable starter plan. Vendor discovery geocodes with Photon, checks nearby OpenStreetMap records, then uses Google Maps grounding when local coverage is empty. If Gemini quota is exhausted too, it provides a direct Google Maps search link instead of inventing a business. Results are constrained to the geocoded city and returned five at a time. Vite embeds `VITE_` values in the browser bundle; do not commit `.env.local`. The planner never creates sample events. Without Firebase configuration, the landing page stays available and the sign-in action explains what setup is missing. Enable Google as a sign-in provider and create Firestore in the Firebase console. Publish the included `firestore.rules` before using the app.
+Copy `.env.example` to `.env.local`. Firebase values are web-app configuration, not server secrets. AI plan generation uses Gemini 3.5 Flash-Lite with a short structured response and a Gemini Flash fallback; if Gemini quota is unavailable, it creates an explicitly labeled editable starter plan. Vendor discovery geocodes with Photon, checks nearby OpenStreetMap records, then uses Google Maps grounding when local coverage is empty. If Gemini quota is exhausted too, it provides a direct Google Maps search link instead of inventing a business. Results are constrained to the geocoded city and returned five at a time. Vite embeds `VITE_` values in the browser bundle; do not commit `.env.local`. The planner never creates sample events. Without Firebase configuration, visitors can use guest mode; Google sign-in and Firestore sync require Firebase setup. Enable Google as a sign-in provider and create Firestore in the Firebase console. Publish the included `firestore.rules` before using the app.
 
 ### Google services
 
@@ -48,7 +49,7 @@ Add the deployed domain to Firebase Auth authorized domains and restrict any Gem
 
 ## Data and privacy notes
 
-This client-only prototype stores signed-in events in the user's Firestore path. AI planning sends event type, city, event date, guest count, budget, style, and optional notes to Gemini. Place discovery sends the selected category and city (or coordinates after the user chooses location access) to Photon for geocoding, Overpass for nearby OpenStreetMap records, and Google Maps grounding when needed. Do not put guest names, email addresses, or phone numbers in AI notes. Verify search results and vendor details directly before making arrangements. Review and update the Privacy page and data-retention process before public use.
+Signed-in events are stored in the user's Firestore path. Guest-mode events are stored in browser local storage on that device and can be cleared by clearing site data; they are not shared across browsers. AI planning sends event type, city, event date, guest count, budget, style, and optional notes to Gemini. Place discovery sends the selected category and city (or coordinates after the user chooses location access) to Photon for geocoding, Overpass for nearby OpenStreetMap records, and Google Maps grounding when needed. Do not put guest names, email addresses, or phone numbers in AI notes. Verify search results and vendor details directly before making arrangements. Review and update the Privacy page and data-retention process before public use.
 
 ## Repository size
 
