@@ -104,6 +104,18 @@ describe("searchGroundedPlaces", () => {
     expect(places[0].mapsUrl).toContain(encodeURIComponent("Cake shops, Test City"));
   });
 
+  it("falls through to Maps search when the public Overpass service is unavailable", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ features: [cityFeature] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response("busy", { status: 503 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { searchGroundedPlaces } = await import("./groundedPlaces");
+    const places = await searchGroundedPlaces({ category: "Cake shops", location: "Test City" });
+
+    expect(places[0]?.source).toBe("maps-search");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("uses local OpenStreetMap results even when a Gemini key is configured", async () => {
     vi.stubEnv("VITE_GEMINI_API_KEY", "test-only-key");
     const fetchMock = mockCityAndPlaces();

@@ -171,7 +171,7 @@ async function searchLocalPlaces(category: string, location: string, coordinates
   if (latitude === undefined || longitude === undefined) {
     const geocodeUrl = new URL(PHOTON_API);
     geocodeUrl.search = new URLSearchParams({ q: location, limit: "5", lang: "en" }).toString();
-    const geocodeResponse = await fetch(geocodeUrl, { signal: AbortSignal.timeout(10_000) });
+    const geocodeResponse = await fetch(geocodeUrl, { signal: AbortSignal.timeout(7_000) });
     if (!geocodeResponse.ok) throw new Error("Could not look up that city. Check the spelling or add the state or country.");
     const geocode = await geocodeResponse.json() as { features?: PhotonFeature[] };
     const features = geocode.features || [];
@@ -185,14 +185,20 @@ async function searchLocalPlaces(category: string, location: string, coordinates
 
   const query = overpassQuery(category, latitude!, longitude!, coordinates ? 8_000 : 12_000);
   if (!overpassTags(category).length) throw new Error("That vendor category is not available in local search yet.");
-  const response = await fetch(OVERPASS_API, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
-    body: `data=${encodeURIComponent(query)}`,
-    signal: AbortSignal.timeout(25_000),
-  });
-  if (!response.ok) throw new Error("Local place search is busy right now. Please try again in a moment.");
-  const payload = await response.json() as { elements?: OverpassElement[] };
+  let payload: { elements?: OverpassElement[] } = {};
+  try {
+    const response = await fetch(OVERPASS_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+      body: `data=${encodeURIComponent(query)}`,
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (response.ok) payload = await response.json() as { elements?: OverpassElement[] };
+    // A public Overpass limit or timeout should fall through to Google Maps
+    // grounding instead of ending the vendor search with no results.
+  } catch {
+    payload = {};
+  }
   const center: [number, number] = [longitude!, latitude!];
   const maxDistanceKm = coordinates ? 8 : targetCity ? 12 : 8;
   const places = (payload.elements || []).flatMap((element) => {
