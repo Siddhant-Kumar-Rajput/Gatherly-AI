@@ -29,11 +29,13 @@ describe("generateEventPlan", () => {
     expect(plan.summary).toBe(planResponse.summary);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, options] = fetchMock.mock.calls[0];
-    expect(url).toContain("/models/gemini-3.8-flash:generateContent");
+    expect(url).toContain("/models/gemini-3.5-flash-lite:generateContent");
     expect(options.headers["x-goog-api-key"]).toBe("test-key-1");
     expect(url).not.toContain("test-key-1");
     const body = JSON.parse(options.body);
     expect(body.generationConfig.responseMimeType).toBe("application/json");
+    expect(body.generationConfig.maxOutputTokens).toBeLessThanOrEqual(1200);
+    expect(body.generationConfig.thinkingConfig.thinkingLevel).toBe("MINIMAL");
     expect(body.generationConfig.responseSchema.required).toContain("budgetLines");
     expect(plan.budgetLines.reduce((sum, line) => sum + line.highEstimate, 0)).toBeLessThanOrEqual(60000);
     expect(plan.contingency).toBeLessThanOrEqual(60000 - plan.highSideTotal);
@@ -52,9 +54,8 @@ describe("generateEventPlan", () => {
     expect(fetchMock.mock.calls.map((call) => call[1].headers["x-goog-api-key"])).toEqual(["test-key-1", "test-key-2"]);
   });
 
-  it("retries a temporary 503 and falls back to Gemini Flash-Lite", async () => {
+  it("falls back to Gemini Flash when Flash-Lite is temporarily unavailable", async () => {
     fetchMock
-      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: "Service unavailable" } }), { status: 503 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: "Service unavailable" } }), { status: 503 }))
       .mockResolvedValueOnce(successResponse());
     const { generateEventPlan } = await import("./ai");
@@ -63,17 +64,17 @@ describe("generateEventPlan", () => {
 
     expect(plan.summary).toBe(planResponse.summary);
     expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
-      expect.stringContaining("gemini-3.8-flash"), expect.stringContaining("gemini-3.8-flash"), expect.stringContaining("gemini-3.5-flash-lite"),
+      expect.stringContaining("gemini-3.5-flash-lite"), expect.stringContaining("gemini-3.8-flash"),
     ]);
   });
 
-  it("skips a stalled primary model and tries Flash-Lite immediately", async () => {
+  it("skips a stalled Flash-Lite model and tries Flash immediately", async () => {
     fetchMock.mockRejectedValueOnce(Object.assign(new Error("Timed out"), { name: "TimeoutError" })).mockResolvedValueOnce(successResponse());
     const { generateEventPlan } = await import("./ai");
 
     await generateEventPlan({ kind: "Birthday", date: "2027-06-12", city: "Bengaluru", guests: 20, budget: 60000, style: "" });
 
-    expect(String(fetchMock.mock.calls[1][0])).toContain("gemini-3.5-flash-lite");
+    expect(String(fetchMock.mock.calls[1][0])).toContain("gemini-3.8-flash");
   });
 
   it("surfaces empty model responses as a useful error", async () => {

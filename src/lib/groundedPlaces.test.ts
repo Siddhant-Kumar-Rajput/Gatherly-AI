@@ -6,16 +6,22 @@ const cityFeature = {
   geometry: { type: "Point", coordinates: [77.6, 12.9] },
 };
 
-function cafeFeatures() {
-  return [...Array.from({ length: 7 }, (_, index) => ({
-    type: "Feature",
-    properties: { name: `Cafe ${index + 1}`, osm_type: "N", osm_id: index + 10, osm_key: "amenity", osm_value: "cafe", street: "Market Road", city: "Test City" },
-    geometry: { type: "Point", coordinates: [77.6 + index / 100, 12.9] },
-  })),
-  { type: "Feature", properties: { name: "Nearby restaurant", osm_type: "N", osm_id: 40, osm_key: "amenity", osm_value: "restaurant", city: "Test City" }, geometry: { type: "Point", coordinates: [77.61, 12.9] } },
-  { type: "Feature", properties: { name: "Cafe in adjacent city", osm_type: "N", osm_id: 42, osm_key: "amenity", osm_value: "cafe", city: "Adjacent Town" }, geometry: { type: "Point", coordinates: [77.61, 12.9] } },
-  { type: "Feature", properties: { name: "Cafe in another city", osm_type: "N", osm_id: 41, osm_key: "amenity", osm_value: "cafe", city: "Elsewhere" }, geometry: { type: "Point", coordinates: [90, 23] } },
+function cafeElements(): Array<Record<string, unknown>> {
+  return [
+    ...Array.from({ length: 7 }, (_, index) => ({
+      type: "node", id: index + 10, lat: 12.9, lon: 77.6 + index / 100,
+      tags: { name: `Cafe ${index + 1}`, amenity: "cafe", "addr:street": "Market Road", "addr:city": "Test City" },
+    })),
+    { type: "node", id: 40, lat: 12.9, lon: 77.61, tags: { name: "Nearby restaurant", amenity: "restaurant", "addr:city": "Test City" } },
+    { type: "node", id: 42, lat: 12.9, lon: 77.61, tags: { name: "Adjacent city cafe", amenity: "cafe", "addr:city": "Adjacent Town" } },
+    { type: "node", id: 41, lat: 23, lon: 90, tags: { name: "Far away cafe", amenity: "cafe" } },
   ];
+}
+
+function mockCityAndPlaces(elements: Array<Record<string, unknown>> = cafeElements()) {
+  return vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify({ features: [cityFeature] }), { status: 200 }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ elements }), { status: 200 }));
 }
 
 describe("searchGroundedPlaces", () => {
@@ -26,10 +32,8 @@ describe("searchGroundedPlaces", () => {
     vi.stubEnv("VITE_GEMINI_API_KEY_3", "");
   });
 
-  it("finds real local places without a key, returns five at a time, and builds Google Maps links", async () => {
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ features: [cityFeature] }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ features: cafeFeatures() }), { status: 200 }));
+  it("returns five real nearby cafes per page and filters other cities", async () => {
+    const fetchMock = mockCityAndPlaces();
     vi.stubGlobal("fetch", fetchMock);
     const { searchGroundedPlaces } = await import("./groundedPlaces");
 
@@ -38,29 +42,44 @@ describe("searchGroundedPlaces", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(firstPage).toHaveLength(5);
-    expect(firstPage[0]).toMatchObject({ id: "osm:N:10", name: "Cafe 1", source: "openstreetmap" });
+    expect(firstPage[0]).toMatchObject({ id: "osm:node:10", name: "Cafe 1", source: "openstreetmap" });
     expect(firstPage[0].description).toContain("Market Road");
     expect(firstPage[0].mapsUrl).toContain("google.com/maps/search");
     expect(secondPage.map((place) => place.name)).toEqual(["Cafe 6", "Cafe 7"]);
-    const placeRequestUrl = new URL(String(fetchMock.mock.calls[1][0]));
-    expect(placeRequestUrl.searchParams.get("q")).toBe("cafe");
-    expect(placeRequestUrl.searchParams.get("lat")).toBe("12.9");
-    expect(placeRequestUrl.searchParams.get("lon")).toBe("77.6");
+    const [url, options] = fetchMock.mock.calls[1];
+    expect(String(url)).toContain("overpass-api.de/api/interpreter");
+    expect(options.method).toBe("POST");
+    const query = new URLSearchParams(options.body).get("data");
+    expect(query).toContain("[\"amenity\"=\"cafe\"]");
+    expect(query).toContain("77.6");
+    expect(query).toContain("12.9");
+  });
+
+  it("searches bakeries and confectionery shops for cake vendors", async () => {
+    const fetchMock = mockCityAndPlaces([
+      { type: "node", id: 5, lat: 12.9, lon: 77.6, tags: { name: "Sweet Shop", shop: "confectionery" } },
+      { type: "node", id: 6, lat: 12.91, lon: 77.61, tags: { name: "Local Bakery", shop: "bakery" } },
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    const { searchGroundedPlaces } = await import("./groundedPlaces");
+    const places = await searchGroundedPlaces({ category: "Cake shops", location: "Test City" });
+
+    expect(places.map((place) => place.name)).toEqual(["Sweet Shop", "Local Bakery"]);
+    const query = new URLSearchParams(fetchMock.mock.calls[1][1].body).get("data");
+    expect(query).toContain("[\"shop\"=\"bakery\"]");
+    expect(query).toContain("[\"shop\"=\"confectionery\"]");
   });
 
   it("uses local OpenStreetMap results even when a Gemini key is configured", async () => {
     vi.stubEnv("VITE_GEMINI_API_KEY", "test-only-key");
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ features: [cityFeature] }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ features: cafeFeatures() }), { status: 200 }));
+    const fetchMock = mockCityAndPlaces();
     vi.stubGlobal("fetch", fetchMock);
     const { searchGroundedPlaces } = await import("./groundedPlaces");
-
     const places = await searchGroundedPlaces({ category: "cafes", location: "Test City" });
 
     expect(places).toHaveLength(5);
     expect(places[0].source).toBe("openstreetmap");
-    expect(places.every((place) => !["Nearby restaurant", "Cafe in another city", "Cafe in adjacent city"].includes(place.name))).toBe(true);
+    expect(places.every((place) => !["Nearby restaurant", "Far away cafe", "Adjacent city cafe"].includes(place.name))).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 

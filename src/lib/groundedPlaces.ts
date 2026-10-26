@@ -27,34 +27,43 @@ type PhotonFeature = {
 };
 
 const PHOTON_API = "https://photon.komoot.io/api/";
+const OVERPASS_API = "https://overpass-api.de/api/interpreter";
 const resultCache = new Map<string, { savedAt: number; places: GroundedPlace[] }>();
-
-function photonCategory(category: string): string {
-  const normalized = category.toLocaleLowerCase();
-  if (/cafe|coffee/.test(normalized)) return "cafe";
-  if (/cake|baker/.test(normalized)) return "bakery";
-  if (/restaurant|cater|buffet|food/.test(normalized)) return "restaurant";
-  if (/banquet|venue|hall/.test(normalized)) return "event venue";
-  if (/photograph/.test(normalized)) return "photographer";
-  if (/makeup|beauty/.test(normalized)) return "beauty salon";
-  if (/florist|flower/.test(normalized)) return "florist";
-  if (/decorat/.test(normalized)) return "event decoration";
-  if (/sound|audio|av/.test(normalized)) return "event sound equipment";
-  return category;
-}
 
 function mapUrl(name: string, address: string): string {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([name, address].filter(Boolean).join(", "))}`;
 }
 
-function matchesPlaceType(category: string, properties: NonNullable<PhotonFeature["properties"]>): boolean {
-  const key = properties.osm_key?.toLowerCase();
-  const value = properties.osm_value?.toLowerCase();
+type OverpassElement = {
+  type: string;
+  id: number;
+  lat?: number;
+  lon?: number;
+  center?: { lat: number; lon: number };
+  tags?: Record<string, string>;
+};
+
+function overpassTags(category: string): Array<[string, string]> {
   const normalized = category.toLocaleLowerCase();
-  if (/cafe|coffee/.test(normalized)) return (key === "amenity" && value === "cafe") || (key === "shop" && ["coffee", "tea"].includes(value || ""));
-  if (/cake|baker/.test(normalized)) return key === "shop" && value === "bakery";
-  if (/restaurant|cater|buffet|food/.test(normalized)) return key === "amenity" && ["restaurant", "fast_food", "food_court", "catering"].includes(value || "");
-  return true;
+  if (/cake|baker/.test(normalized)) return [["shop", "bakery"], ["shop", "confectionery"], ["craft", "baker"]];
+  if (/cafe|coffee/.test(normalized)) return [["amenity", "cafe"], ["shop", "coffee"]];
+  if (/restaurant|cater|buffet|food/.test(normalized)) return [["amenity", "restaurant"], ["amenity", "fast_food"], ["amenity", "food_court"], ["shop", "food"]];
+  if (/banquet|venue|hall|party/.test(normalized)) return [["amenity", "events_venue"], ["building", "event_venue"], ["leisure", "events_venue"]];
+  if (/photograph/.test(normalized)) return [["shop", "photography"], ["craft", "photographer"]];
+  if (/makeup|beauty/.test(normalized)) return [["shop", "beauty"], ["shop", "hairdresser"]];
+  if (/florist|flower/.test(normalized)) return [["shop", "florist"]];
+  if (/decorat/.test(normalized)) return [["shop", "interior_decoration"], ["craft", "signmaker"]];
+  if (/sound|audio|av/.test(normalized)) return [["shop", "electronics"], ["craft", "electronics_repair"]];
+  return [];
+}
+
+function matchesOverpassType(category: string, tags: Record<string, string>): boolean {
+  return overpassTags(category).some(([key, value]) => tags[key] === value);
+}
+
+function overpassQuery(category: string, latitude: number, longitude: number, radius: number): string {
+  const selectors = overpassTags(category).map(([key, value]) => `nwr(around:${radius},${latitude},${longitude})["${key}"="${value}"];`).join("");
+  return `[out:json][timeout:20];(${selectors});out center tags 100;`;
 }
 
 function distanceKm(a: [number, number], b: [number, number]): number {
@@ -88,7 +97,7 @@ function getUniquePlaces(places: GroundedPlace[], excludeNames: string[]): Groun
   }).slice(0, 5);
 }
 
-async function searchPhotonPlaces(category: string, location: string, coordinates?: { latitude: number; longitude: number }): Promise<GroundedPlace[]> {
+async function searchLocalPlaces(category: string, location: string, coordinates?: { latitude: number; longitude: number }): Promise<GroundedPlace[]> {
   let latitude = coordinates?.latitude;
   let longitude = coordinates?.longitude;
   let targetCity: string | undefined;
@@ -108,34 +117,35 @@ async function searchPhotonPlaces(category: string, location: string, coordinate
     targetCity = place.properties?.city || (/city|town|village|municipality/.test(placeType) ? place.properties?.name : undefined);
   }
 
-  const searchUrl = new URL(PHOTON_API);
-  searchUrl.search = new URLSearchParams({
-    q: photonCategory(category),
-    lat: String(latitude),
-    lon: String(longitude),
-    zoom: coordinates ? "14" : "13",
-    limit: "50",
-    lang: "en",
-  }).toString();
-  const response = await fetch(searchUrl, { signal: AbortSignal.timeout(12_000) });
-  if (!response.ok) throw new Error("Local place search is temporarily unavailable. Please try again in a moment.");
-  const payload = await response.json() as { features?: PhotonFeature[] };
+  const query = overpassQuery(category, latitude!, longitude!, coordinates ? 8_000 : 12_000);
+  if (!overpassTags(category).length) throw new Error("That vendor category is not available in local search yet.");
+  const response = await fetch(OVERPASS_API, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+    body: `data=${encodeURIComponent(query)}`,
+    signal: AbortSignal.timeout(25_000),
+  });
+  if (!response.ok) throw new Error("Local place search is busy right now. Please try again in a moment.");
+  const payload = await response.json() as { elements?: OverpassElement[] };
   const center: [number, number] = [longitude!, latitude!];
-  // Photon does fuzzy text matching. Bound results to the searched area and enforce
-  // strict OSM categories for the common cafe/restaurant mix-up.
-  const maxDistanceKm = coordinates ? 8 : targetCity ? 20 : 8;
-  return (payload.features || []).flatMap((feature) => {
-    const properties = feature.properties;
-    const point = feature.geometry?.coordinates;
-    if (!properties?.name || !properties.osm_id || !properties.osm_type || !point) return [];
-    if (distanceKm(center, point) > maxDistanceKm || !matchesPlaceType(category, properties)) return [];
-    if (targetCity && properties.city && !sameLocality(properties.city, targetCity)) return [];
-    const address = [properties.housenumber, properties.street, properties.district || properties.locality, properties.city, properties.state, properties.postcode].filter(Boolean).join(", ");
-    const detail = [properties.osm_value?.replaceAll("_", " "), address].filter(Boolean).join(" · ");
+  const maxDistanceKm = coordinates ? 8 : targetCity ? 12 : 8;
+  return (payload.elements || []).flatMap((element) => {
+    const tags = element.tags || {};
+    const name = tags.name || tags.brand || tags.operator;
+    const listedCity = tags["addr:city"];
+    const point = element.lat !== undefined && element.lon !== undefined
+      ? [element.lon, element.lat] as [number, number]
+      : element.center ? [element.center.lon, element.center.lat] as [number, number] : undefined;
+    if (!name || !point || !element.id || !matchesOverpassType(category, tags)) return [];
+    if (distanceKm(center, point) > maxDistanceKm) return [];
+    if (targetCity && listedCity && !sameLocality(listedCity, targetCity)) return [];
+    const address = [tags["addr:housenumber"], tags["addr:street"], tags["addr:suburb"] || tags["addr:neighbourhood"], tags["addr:city"] || targetCity || location, tags["addr:postcode"]].filter(Boolean).join(", ");
+    const categoryTag = Object.entries(tags).find(([key]) => ["shop", "amenity", "craft", "leisure", "building"].includes(key));
+    const detail = [categoryTag?.[1]?.replaceAll("_", " "), address].filter(Boolean).join(" · ");
     return [{
-      id: `osm:${properties.osm_type}:${properties.osm_id}`,
-      name: properties.name,
-      mapsUrl: mapUrl(properties.name, address || location),
+      id: `osm:${element.type}:${element.id}`,
+      name,
+      mapsUrl: mapUrl(name, address || location),
       description: detail || undefined,
       source: "openstreetmap" as const,
     }];
@@ -160,7 +170,7 @@ export async function searchGroundedPlaces({
   const cached = resultCache.get(cacheKey);
   if (cached && Date.now() - cached.savedAt < 10 * 60_000) return getUniquePlaces(cached.places, excludeNames);
 
-  const places = await searchPhotonPlaces(category.trim(), location.trim(), coordinates);
+  const places = await searchLocalPlaces(category.trim(), location.trim(), coordinates);
   resultCache.set(cacheKey, { savedAt: Date.now(), places });
   if (resultCache.size > 30) resultCache.delete(resultCache.keys().next().value!);
   return getUniquePlaces(places, excludeNames);
